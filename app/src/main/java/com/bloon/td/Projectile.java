@@ -80,7 +80,7 @@ public class Projectile {
         y += vy * dt;
         angle = (float) Math.atan2(vy, vx);
 
-        if (x < -50 || x > g.screenW + 50 || y < g.topPad - 50 || y > g.topPad + g.rows * g.tile + 50) {
+        if (x < -50 || x > g.playW + 50 || y < g.hudH - 50 || y > g.hudH + g.playH + 50) {
             if (kind == K_BOMB) explode(g);
             dead = true;
             return;

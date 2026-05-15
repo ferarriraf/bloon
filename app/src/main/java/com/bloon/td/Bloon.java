@@ -1,11 +1,10 @@
 package com.bloon.td;
 
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.PointF;
-import android.graphics.RadialGradient;
-import android.graphics.Shader;
+import android.graphics.RectF;
 
 public class Bloon {
     int type;
@@ -21,7 +20,7 @@ public class Bloon {
     float dirX = 1, dirY = 0;
     float spawnDelay = 0f;
     float wobble = 0f;
-    float freezeTimer = 0f; // when > 0, bloon frozen
+    float freezeTimer = 0f;
 
     public Bloon(int type) {
         this.type = type;
@@ -29,7 +28,7 @@ public class Bloon {
         this.damage = 1;
         if (type == Game.B_BLACK) blackImmuneExplosion = true;
         if (type == Game.B_LEAD) { leadImmuneSharp = true; blackImmuneExplosion = false; }
-        if (type == Game.B_MOAB) { damage = 100; this.hp = 200; }
+        if (type == Game.B_MOAB) { damage = 100; this.hp = 220; }
         wobble = (float) (Math.random() * Math.PI * 2);
     }
 
@@ -49,90 +48,39 @@ public class Bloon {
         float l = (float) Math.sqrt(dx * dx + dy * dy);
         if (l > 0.01f) { dirX = dx / l; dirY = dy / l; }
         wobble += dt * 6f;
-        // radius
-        float base = Game.BLOON_RADIUS[type];
-        radius = base * (g.tile / 110f);
-        if (radius < 13) radius = 13;
-        if (type == Game.B_MOAB) radius = g.tile * 0.62f;
+        radius = Math.max(14, Game.BLOON_RADIUS[type] * g.tile);
+        if (type == Game.B_MOAB) radius = g.tile * 1.1f;
     }
 
-    public void draw(Canvas c, Paint p) {
+    public void draw(Canvas c, Paint p, Game g) {
+        Bitmap bmp = g.bloonBmp[type];
         float wob = (float) Math.sin(wobble) * radius * 0.04f;
-        float drawR = radius + wob;
-        // shadow
-        p.setShader(null);
-        p.setColor(0x44000000);
-        c.drawCircle(pos.x + 3, pos.y + 5, drawR * 0.95f, p);
-
-        int col = Game.BLOON_COLOR[type];
-        int colDark = darken(col, 0.55f);
-        if (type == Game.B_MOAB) {
-            // metallic look
-            RadialGradient rg = new RadialGradient(pos.x - drawR * 0.35f, pos.y - drawR * 0.4f, drawR * 1.4f,
-                    0xFFE1BEE7, 0xFF4A148C, Shader.TileMode.CLAMP);
-            p.setShader(rg);
-            c.drawCircle(pos.x, pos.y, drawR, p);
-            p.setShader(null);
-            // panels
-            p.setColor(0xFF4A148C);
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(3);
-            c.drawCircle(pos.x, pos.y, drawR * 0.7f, p);
-            c.drawLine(pos.x - drawR * 0.7f, pos.y, pos.x + drawR * 0.7f, pos.y, p);
-            p.setStyle(Paint.Style.FILL);
-            // engines
-            p.setColor(0xFFFF7043);
-            c.drawCircle(pos.x - drawR * 0.85f, pos.y, drawR * 0.15f, p);
-            c.drawCircle(pos.x - drawR * 0.85f, pos.y, drawR * 0.08f, p);
-            p.setColor(0xFFFFEB3B);
-            p.setTextSize(drawR * 0.4f);
-            c.drawText("MOAB", pos.x - drawR * 0.45f, pos.y + drawR * 0.15f, p);
+        float r = radius + wob;
+        if (bmp != null) {
+            float sz = r * 2.2f;
+            RectF dst = new RectF(pos.x - sz / 2, pos.y - sz / 2, pos.x + sz / 2, pos.y + sz / 2 + r * 0.25f);
+            c.drawBitmap(bmp, null, dst, p);
         } else {
-            // body gradient
-            RadialGradient rg = new RadialGradient(pos.x - drawR * 0.35f, pos.y - drawR * 0.45f, drawR * 1.3f,
-                    lighten(col, 0.4f), colDark, Shader.TileMode.CLAMP);
-            p.setShader(rg);
-            c.drawCircle(pos.x, pos.y, drawR, p);
-            p.setShader(null);
-            // outline
-            p.setColor(colDark);
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(2);
-            c.drawCircle(pos.x, pos.y, drawR, p);
-            p.setStyle(Paint.Style.FILL);
-            // highlight
-            p.setColor(0x88FFFFFF);
-            c.drawCircle(pos.x - drawR * 0.35f, pos.y - drawR * 0.4f, drawR * 0.28f, p);
-            p.setColor(0x55FFFFFF);
-            c.drawCircle(pos.x - drawR * 0.15f, pos.y - drawR * 0.2f, drawR * 0.15f, p);
-            // knot
-            p.setColor(colDark);
-            android.graphics.Path knot = new android.graphics.Path();
-            knot.moveTo(pos.x - drawR * 0.2f, pos.y + drawR);
-            knot.lineTo(pos.x + drawR * 0.2f, pos.y + drawR);
-            knot.lineTo(pos.x, pos.y + drawR * 1.2f);
-            knot.close();
-            c.drawPath(knot, p);
+            // fallback
+            p.setColor(Game.BLOON_COLOR[type]);
+            c.drawCircle(pos.x, pos.y, r, p);
         }
-
-        // freeze overlay
         if (freezeTimer > 0) {
             p.setColor(0x60B3E5FC);
-            c.drawCircle(pos.x, pos.y, drawR * 1.05f, p);
+            c.drawCircle(pos.x, pos.y, r * 1.1f, p);
             p.setColor(0xCC81D4FA);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(3);
             for (int i = 0; i < 3; i++) {
                 c.save();
                 c.rotate(i * 60, pos.x, pos.y);
-                c.drawLine(pos.x - drawR * 0.8f, pos.y, pos.x + drawR * 0.8f, pos.y, p);
+                c.drawLine(pos.x - r * 0.8f, pos.y, pos.x + r * 0.8f, pos.y, p);
                 c.restore();
             }
             p.setStyle(Paint.Style.FILL);
         }
     }
 
-    /** apply hit. returns true if popped. */
     public boolean hit(int dmg, int kind, boolean canLeadPop, Game g) {
         if (dead) return false;
         boolean sharp = (kind == Projectile.K_DART || kind == Projectile.K_TACK
@@ -169,7 +117,7 @@ public class Bloon {
         return false;
     }
 
-    static int lighten(int c, float t) {
+    public static int lighten(int c, float t) {
         int a = (c >> 24) & 0xFF;
         int r = (c >> 16) & 0xFF;
         int g = (c >> 8) & 0xFF;
@@ -179,7 +127,7 @@ public class Bloon {
         b = (int) (b + (255 - b) * t);
         return (a << 24) | (r << 16) | (g << 8) | b;
     }
-    static int darken(int c, float t) {
+    public static int darken(int c, float t) {
         int a = (c >> 24) & 0xFF;
         int r = (int) (((c >> 16) & 0xFF) * t);
         int g = (int) (((c >> 8) & 0xFF) * t);

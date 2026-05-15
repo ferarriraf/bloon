@@ -1,7 +1,6 @@
 package com.bloon.td;
 
 import android.graphics.Bitmap;
-import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
@@ -17,19 +16,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Game {
-    // ---------- state ----------
-    public static final int S_MENU = 0;
-    public static final int S_PLAYING = 1;
-    int state = S_MENU;
+    // ---------- screen states ----------
+    public static final int S_MAIN = 0;
+    public static final int S_MAPS = 1;
+    public static final int S_TOWERS = 2;
+    public static final int S_PLAYING = 3;
+    public static final int S_HOWTO = 4;
+    int state = S_MAIN;
 
     // ---------- screen ----------
-    int screenW = 1080, screenH = 1920;
-    static final int COLS = 9;
-    int rows = MapDef.MAP_ROWS;
+    int screenW = 1920, screenH = 1080;
+    static final int COLS = MapDef.COLS;
+    static final int ROWS = MapDef.ROWS;
     float tile;
-    float topPad;     // HUD height
-    float bottomBar;  // bottom UI height
-    float gameAreaH;  // height of play area
+    float hudH;
+    float playW, playH;
+    float panelX, panelW; // right panel
+    float menuAnim = 0f;
 
     // ---------- map ----------
     int selectedWorld = 0;
@@ -40,6 +43,13 @@ public class Game {
     boolean[][] blocked;
     Bitmap bgCache;
 
+    // ---------- pre-rendered art ----------
+    final Bitmap[] towerBmp = new Bitmap[Tower.TYPE_COUNT];
+    final Bitmap[] towerGunBmp = new Bitmap[Tower.TYPE_COUNT];
+    final Bitmap[] bloonBmp = new Bitmap[8];
+    boolean assetsBuilt = false;
+    int assetsTile = -1;
+
     // ---------- game state ----------
     int cash, lives, wave, score;
     float speedMult = 1f;
@@ -47,6 +57,7 @@ public class Game {
     boolean waveActive = false;
     boolean gameOver = false;
     boolean victory = false;
+    int totalCoins = 0; // shown in menu
 
     // ---------- spawning ----------
     final List<int[]> waveQueue = new ArrayList<>();
@@ -61,7 +72,6 @@ public class Game {
     final List<Tower> towers = new ArrayList<>();
     final List<Projectile> projectiles = new ArrayList<>();
     final List<Floater> floaters = new ArrayList<>();
-    // staging buffers to avoid concurrent modification
     final List<Bloon> pendingBloons = new ArrayList<>();
     final List<Projectile> pendingProjectiles = new ArrayList<>();
 
@@ -73,43 +83,84 @@ public class Game {
     float lastTouchX, lastTouchY;
     final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     final Paint textP = new Paint(Paint.ANTI_ALIAS_FLAG);
+    final Path scratchPath = new Path();
 
-    // ---------- towers ----------
+    float totalTime = 0f;
+
+    // tower types
     public static final int T_DART = 0, T_TACK = 1, T_BOMB = 2, T_SNIPER = 3,
             T_NINJA = 4, T_ICE = 5, T_SUPER = 6, T_WIZARD = 7;
 
-    // ---------- bloons ----------
+    // bloon types
     public static final int B_RED = 0, B_BLUE = 1, B_GREEN = 2, B_YELLOW = 3,
             B_PINK = 4, B_BLACK = 5, B_LEAD = 6, B_MOAB = 7;
     public static final int[] BLOON_COLOR = {
             0xFFE53935, 0xFF1E88E5, 0xFF43A047, 0xFFFDD835,
-            0xFFE91E63, 0xFF212121, 0xFF455A64, 0xFF8E24AA
+            0xFFE91E63, 0xFF212121, 0xFF607D8B, 0xFF8E24AA
     };
-    public static final float[] BLOON_SPEED = {3.0f, 3.8f, 4.7f, 6.0f, 7.2f, 3.4f, 2.8f, 1.6f};
+    public static final float[] BLOON_SPEED = {3.2f, 4.0f, 4.9f, 6.2f, 7.4f, 3.6f, 2.9f, 1.7f};
     public static final int[] BLOON_REWARD = {1, 2, 3, 4, 5, 11, 8, 90};
     public static final int[] BLOON_CHILD = {-1, B_RED, B_BLUE, B_GREEN, B_YELLOW, B_PINK, B_BLACK, -1};
     public static final int[] BLOON_CHILD_N = {0, 1, 1, 1, 1, 2, 2, 0};
     public static final int[] BLOON_HP = {1, 1, 1, 1, 1, 1, 1, 220};
-    public static final float[] BLOON_RADIUS = {20, 22, 24, 26, 28, 30, 30, 70};
+    public static final float[] BLOON_RADIUS = {0.32f, 0.36f, 0.40f, 0.44f, 0.48f, 0.50f, 0.50f, 1.10f};
 
     public Game() {}
 
     void resize(int w, int h) {
+        if (w <= 0 || h <= 0) return;
         screenW = w; screenH = h;
-        tile = (float) w / COLS;
-        topPad = tile * 1.15f;
-        bottomBar = tile * 2.0f;
-        gameAreaH = h - topPad - bottomBar;
-        rows = MapDef.MAP_ROWS;
+        hudH = Math.max(70, h * 0.10f);
+        // Fit so play area is COLS x ROWS tiles, with at least 2.3 tile wide right panel
+        float tA = (h - hudH) / ROWS;
+        float tB = w / (COLS + 2.3f);
+        tile = Math.min(tA, tB);
+        playW = tile * COLS;
+        playH = tile * ROWS;
+        panelX = playW;
+        panelW = w - playW;
         textP.setColor(Color.WHITE);
-        textP.setTextSize(tile * 0.42f);
-        if (state == S_PLAYING && currentMap != null) reloadMapGeometry();
+        textP.setTextSize(tile * 0.38f);
+        if (currentMap != null) reloadMapGeometry();
+        buildAssets();
+    }
+
+    void buildAssets() {
+        int t = (int) Math.max(40, tile);
+        if (assetsBuilt && assetsTile == t) return;
+        assetsTile = t;
+        // bloons
+        for (int i = 0; i < bloonBmp.length; i++) {
+            float r = Math.max(18, BLOON_RADIUS[i] * tile);
+            int side = (int) (r * 2.6f);
+            Bitmap b = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(b);
+            drawBloonBitmap(c, side / 2f, side / 2f, r, i);
+            if (bloonBmp[i] != null) bloonBmp[i].recycle();
+            bloonBmp[i] = b;
+        }
+        // tower base + gun
+        float r = tile * 0.45f;
+        int side = (int) (r * 2.8f);
+        for (int ty = 0; ty < Tower.TYPE_COUNT; ty++) {
+            Bitmap b = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(b);
+            drawTowerBase(c, side / 2f, side / 2f, r, ty);
+            if (towerBmp[ty] != null) towerBmp[ty].recycle();
+            towerBmp[ty] = b;
+
+            Bitmap g = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
+            Canvas gc = new Canvas(g);
+            drawTowerGun(gc, side / 2f, side / 2f, r, ty);
+            if (towerGunBmp[ty] != null) towerGunBmp[ty].recycle();
+            towerGunBmp[ty] = g;
+        }
+        assetsBuilt = true;
     }
 
     // ---------------- MAP LOADING ----------------
     void loadMap(MapDef m) {
         currentMap = m;
-        reloadMapGeometry();
         cash = 750;
         lives = 120;
         wave = 0;
@@ -121,32 +172,31 @@ public class Game {
         bloons.clear(); towers.clear(); projectiles.clear(); floaters.clear();
         pendingBloons.clear(); pendingProjectiles.clear();
         selectedTower = null; placingTowerType = -1;
+        if (tile > 0) reloadMapGeometry();
         state = S_PLAYING;
         flash(m.name);
     }
 
     void reloadMapGeometry() {
-        // Build pixel-space path from waypoints (col, row in MAP_ROWS grid)
         path.clear();
-        float wH = gameAreaH;
         for (float[] wp : currentMap.waypoints) {
             float px = (wp[0] + 0.5f) * tile;
-            float py = topPad + (wp[1] + 0.5f) * (wH / MapDef.MAP_ROWS);
+            float py = hudH + (wp[1] + 0.5f) * tile;
             path.add(new PointF(px, py));
         }
         totalPathLen = 0;
-        for (int i = 0; i < path.size() - 1; i++) {
+        int maxSeg = Math.min(segLen.length, Math.max(0, path.size() - 1));
+        for (int i = 0; i < maxSeg; i++) {
             float d = dist(path.get(i), path.get(i + 1));
             segLen[i] = d;
             totalPathLen += d;
         }
-        blocked = new boolean[COLS][MapDef.MAP_ROWS];
+        blocked = new boolean[COLS][ROWS];
         markPathBlocked();
         bakeBackground();
     }
 
     void markPathBlocked() {
-        // Block only the tile that contains each step of the path centerline.
         for (int i = 0; i < path.size() - 1; i++) {
             PointF a = path.get(i), b = path.get(i + 1);
             float d = segLen[i];
@@ -156,25 +206,22 @@ public class Game {
                 float x = a.x + (b.x - a.x) * t;
                 float y = a.y + (b.y - a.y) * t;
                 int cx = (int) (x / tile);
-                int cy = (int) ((y - topPad) / (gameAreaH / MapDef.MAP_ROWS));
+                int cy = (int) ((y - hudH) / tile);
                 if (inGrid(cx, cy)) blocked[cx][cy] = true;
             }
         }
     }
 
-    boolean inGrid(int cx, int cy) {
-        return cx >= 0 && cx < COLS && cy >= 0 && cy < MapDef.MAP_ROWS;
-    }
-
-    float tileH() { return gameAreaH / MapDef.MAP_ROWS; }
+    boolean inGrid(int cx, int cy) { return cx >= 0 && cx < COLS && cy >= 0 && cy < ROWS; }
 
     float gridCenterX(int c) { return (c + 0.5f) * tile; }
-    float gridCenterY(int r) { return topPad + (r + 0.5f) * tileH(); }
+    float gridCenterY(int r) { return hudH + (r + 0.5f) * tile; }
 
     boolean canPlace(int cx, int cy) {
         if (!inGrid(cx, cy)) return false;
         if (blocked[cx][cy]) return false;
-        for (Tower t : towers) {
+        for (int i = 0; i < towers.size(); i++) {
+            Tower t = towers.get(i);
             if (t.gridX == cx && t.gridY == cy) return false;
         }
         return true;
@@ -190,101 +237,379 @@ public class Game {
     }
 
     PointF posAlongPath(float dAlong, PointF out) {
+        if (path.size() < 2) { out.x = 0; out.y = 0; return out; }
         float remaining = dAlong;
         for (int i = 0; i < path.size() - 1; i++) {
-            if (remaining <= segLen[i]) {
+            float L = segLen[i];
+            if (remaining <= L) {
                 PointF a = path.get(i), b = path.get(i + 1);
-                float t = remaining / segLen[i];
+                float t = L > 0 ? remaining / L : 0;
                 out.x = a.x + (b.x - a.x) * t;
                 out.y = a.y + (b.y - a.y) * t;
                 return out;
             }
-            remaining -= segLen[i];
+            remaining -= L;
         }
         PointF last = path.get(path.size() - 1);
         out.x = last.x; out.y = last.y;
         return out;
     }
 
-    // ---------------- BACKGROUND BAKING ----------------
+    // ---------------- ASSET PAINTING ----------------
+    void drawBloonBitmap(Canvas c, float cx, float cy, float r, int type) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        // shadow
+        p.setColor(0x55000000);
+        c.drawCircle(cx + 3, cy + 5, r, p);
+
+        int col = BLOON_COLOR[type];
+        if (type == B_MOAB) {
+            RadialGradient rg = new RadialGradient(cx - r * 0.35f, cy - r * 0.4f, r * 1.6f,
+                    0xFFE1BEE7, 0xFF311B92, Shader.TileMode.CLAMP);
+            p.setShader(rg);
+            c.drawCircle(cx, cy, r, p);
+            p.setShader(null);
+            p.setColor(0xFF4A148C);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(Math.max(3, r * 0.05f));
+            c.drawCircle(cx, cy, r * 0.72f, p);
+            c.drawLine(cx - r * 0.72f, cy, cx + r * 0.72f, cy, p);
+            p.setStyle(Paint.Style.FILL);
+            // engine
+            p.setColor(0xFFFF7043);
+            c.drawCircle(cx - r * 0.85f, cy, r * 0.18f, p);
+            p.setColor(0xFFFFEB3B);
+            c.drawCircle(cx - r * 0.88f, cy, r * 0.1f, p);
+            // text
+            p.setColor(0xFFFFEB3B);
+            p.setTextSize(r * 0.42f);
+            p.setFakeBoldText(true);
+            float tw = p.measureText("MOAB");
+            c.drawText("MOAB", cx - tw / 2, cy + r * 0.15f, p);
+            p.setFakeBoldText(false);
+        } else {
+            int light = Bloon.lighten(col, 0.5f);
+            int dark = Bloon.darken(col, 0.55f);
+            RadialGradient rg = new RadialGradient(cx - r * 0.35f, cy - r * 0.45f, r * 1.4f,
+                    light, dark, Shader.TileMode.CLAMP);
+            p.setShader(rg);
+            c.drawCircle(cx, cy, r, p);
+            p.setShader(null);
+            p.setColor(dark);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(Math.max(2, r * 0.05f));
+            c.drawCircle(cx, cy, r, p);
+            p.setStyle(Paint.Style.FILL);
+            // highlight
+            p.setColor(0xCCFFFFFF);
+            c.drawCircle(cx - r * 0.35f, cy - r * 0.4f, r * 0.28f, p);
+            p.setColor(0x88FFFFFF);
+            c.drawCircle(cx - r * 0.15f, cy - r * 0.15f, r * 0.15f, p);
+            // knot
+            p.setColor(dark);
+            Path knot = new Path();
+            knot.moveTo(cx - r * 0.2f, cy + r * 0.95f);
+            knot.lineTo(cx + r * 0.2f, cy + r * 0.95f);
+            knot.lineTo(cx, cy + r * 1.2f);
+            knot.close();
+            c.drawPath(knot, p);
+            if (type == B_LEAD) {
+                p.setColor(0xFF263238);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(r * 0.18f);
+                c.drawCircle(cx, cy, r * 0.6f, p);
+                p.setStyle(Paint.Style.FILL);
+                p.setColor(0xFFB0BEC5);
+                for (int k = 0; k < 6; k++) {
+                    double a = k * Math.PI / 3;
+                    c.drawCircle(cx + (float) Math.cos(a) * r * 0.5f,
+                            cy + (float) Math.sin(a) * r * 0.5f, r * 0.07f, p);
+                }
+            } else if (type == B_BLACK) {
+                p.setColor(0xFF000000);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(r * 0.12f);
+                c.drawCircle(cx, cy, r * 0.95f, p);
+                p.setStyle(Paint.Style.FILL);
+            }
+        }
+    }
+
+    void drawTowerBase(Canvas c, float cx, float cy, float r, int type) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(0x66000000);
+        c.drawCircle(cx + r * 0.12f, cy + r * 0.2f, r * 1.05f, p);
+        // outer rim
+        p.setColor(0xFF3E2723);
+        c.drawCircle(cx, cy, r * 1.03f, p);
+        p.setColor(0xFF8D6E63);
+        c.drawCircle(cx, cy, r * 0.95f, p);
+        // body
+        int c1 = Tower.BODY_COLOR[type];
+        int c2 = Tower.BODY_COLOR2[type];
+        RadialGradient bodyGrad = new RadialGradient(cx - r * 0.3f, cy - r * 0.3f, r * 1.4f,
+                c1, c2, Shader.TileMode.CLAMP);
+        p.setShader(bodyGrad);
+        c.drawCircle(cx, cy, r * 0.78f, p);
+        p.setShader(null);
+        // outline
+        p.setColor(Tower.darken(c2, 0.7f));
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(2, r * 0.07f));
+        c.drawCircle(cx, cy, r * 0.78f, p);
+        p.setStyle(Paint.Style.FILL);
+        // highlight
+        p.setColor(0x88FFFFFF);
+        c.drawCircle(cx - r * 0.32f, cy - r * 0.36f, r * 0.25f, p);
+        // monkey face hints
+        if (type != T_TACK && type != T_ICE) {
+            p.setColor(0xFFFFE0B2);
+            c.drawCircle(cx, cy - r * 0.05f, r * 0.42f, p);
+            p.setColor(0xFF6D4C41);
+            c.drawCircle(cx - r * 0.16f, cy - r * 0.12f, r * 0.06f, p);
+            c.drawCircle(cx + r * 0.16f, cy - r * 0.12f, r * 0.06f, p);
+            p.setColor(0xFFFFAB91);
+            c.drawCircle(cx, cy + r * 0.12f, r * 0.05f, p);
+            // smile
+            p.setColor(0xFF6D4C41);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(Math.max(2, r * 0.04f));
+            RectF mouth = new RectF(cx - r * 0.13f, cy + r * 0.05f, cx + r * 0.13f, cy + r * 0.25f);
+            c.drawArc(mouth, 20, 140, false, p);
+            p.setStyle(Paint.Style.FILL);
+        }
+    }
+
+    void drawTowerGun(Canvas c, float cx, float cy, float r, int type) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        switch (type) {
+            case T_DART: {
+                p.setColor(0xFF6D4C41);
+                c.drawRect(cx, cy - r * 0.16f, cx + r * 1.05f, cy + r * 0.16f, p);
+                p.setColor(0xFFFAFAFA);
+                Path tri = new Path();
+                tri.moveTo(cx + r * 1.05f, cy - r * 0.28f);
+                tri.lineTo(cx + r * 1.45f, cy);
+                tri.lineTo(cx + r * 1.05f, cy + r * 0.28f);
+                tri.close();
+                c.drawPath(tri, p);
+                p.setColor(0xFFE53935);
+                c.drawRect(cx + r * 0.0f, cy - r * 0.3f, cx + r * 0.18f, cy + r * 0.3f, p);
+                break;
+            }
+            case T_TACK: {
+                p.setColor(0xFF424242);
+                for (int i = 0; i < 8; i++) {
+                    c.save(); c.rotate(i * 45f, cx, cy);
+                    Path nail = new Path();
+                    nail.moveTo(cx + r * 0.3f, cy - r * 0.06f);
+                    nail.lineTo(cx + r * 1.1f, cy);
+                    nail.lineTo(cx + r * 0.3f, cy + r * 0.06f);
+                    nail.close();
+                    c.drawPath(nail, p);
+                    c.restore();
+                }
+                p.setColor(0xFFE0E0E0);
+                c.drawCircle(cx, cy, r * 0.22f, p);
+                p.setColor(0xFF424242);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(Math.max(2, r * 0.04f));
+                c.drawCircle(cx, cy, r * 0.22f, p);
+                p.setStyle(Paint.Style.FILL);
+                break;
+            }
+            case T_BOMB: {
+                p.setColor(0xFF263238);
+                RectF barrel = new RectF(cx - r * 0.05f, cy - r * 0.24f, cx + r * 0.95f, cy + r * 0.24f);
+                c.drawRoundRect(barrel, r * 0.1f, r * 0.1f, p);
+                p.setColor(0xFF455A64);
+                c.drawCircle(cx + r * 0.95f, cy, r * 0.28f, p);
+                p.setColor(0xFFFFCDD2);
+                c.drawCircle(cx - r * 0.05f, cy, r * 0.1f, p);
+                break;
+            }
+            case T_SNIPER: {
+                p.setColor(0xFF1A237E);
+                c.drawRect(cx - r * 0.25f, cy - r * 0.12f, cx + r * 1.25f, cy + r * 0.12f, p);
+                p.setColor(0xFF424242);
+                c.drawRect(cx + r * 1.05f, cy - r * 0.2f, cx + r * 1.25f, cy + r * 0.2f, p);
+                p.setColor(0xFFFFEB3B);
+                c.drawCircle(cx - r * 0.2f, cy, r * 0.16f, p);
+                p.setColor(0xFFB71C1C);
+                c.drawCircle(cx - r * 0.2f, cy, r * 0.08f, p);
+                break;
+            }
+            case T_NINJA: {
+                p.setColor(0xFF263238);
+                c.drawRect(cx - r * 0.05f, cy - r * 0.18f, cx + r * 0.45f, cy + r * 0.18f, p);
+                p.setColor(0xFFE53935);
+                c.drawRect(cx - r * 0.05f, cy - r * 0.22f, cx + r * 0.55f, cy - r * 0.1f, p);
+                // shuriken in front
+                p.setColor(0xFFB0BEC5);
+                for (int i = 0; i < 4; i++) {
+                    c.save(); c.rotate(i * 90, cx + r * 0.7f, cy);
+                    c.drawRect(cx + r * 0.55f, cy - r * 0.06f, cx + r * 0.95f, cy + r * 0.06f, p);
+                    c.restore();
+                }
+                p.setColor(0xFF607D8B);
+                c.drawCircle(cx + r * 0.7f, cy, r * 0.1f, p);
+                break;
+            }
+            case T_ICE: {
+                p.setColor(0xFFB3E5FC);
+                c.drawCircle(cx, cy, r * 0.55f, p);
+                p.setColor(0xFF0277BD);
+                for (int i = 0; i < 6; i++) {
+                    c.save(); c.rotate(i * 60, cx, cy);
+                    c.drawRect(cx + r * 0.05f, cy - r * 0.06f, cx + r * 0.65f, cy + r * 0.06f, p);
+                    // small spikes
+                    c.drawRect(cx + r * 0.4f, cy - r * 0.15f, cx + r * 0.5f, cy + r * 0.15f, p);
+                    c.restore();
+                }
+                p.setColor(0xFFFFFFFF);
+                c.drawCircle(cx, cy, r * 0.18f, p);
+                break;
+            }
+            case T_SUPER: {
+                // cape behind
+                p.setColor(0xFFE53935);
+                Path cape = new Path();
+                cape.moveTo(cx - r * 0.3f, cy - r * 0.5f);
+                cape.lineTo(cx + r * 0.1f, cy + r * 0.7f);
+                cape.lineTo(cx - r * 0.7f, cy + r * 0.7f);
+                cape.lineTo(cx - r * 0.5f, cy - r * 0.5f);
+                cape.close();
+                c.drawPath(cape, p);
+                p.setColor(0xFFB71C1C);
+                c.drawRect(cx - r * 0.6f, cy - r * 0.55f, cx - r * 0.25f, cy - r * 0.4f, p);
+                // body Y
+                p.setColor(0xFFFFEB3B);
+                c.drawCircle(cx, cy, r * 0.5f, p);
+                p.setColor(0xFFFFC107);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(Math.max(2, r * 0.05f));
+                c.drawCircle(cx, cy, r * 0.5f, p);
+                p.setStyle(Paint.Style.FILL);
+                // visor
+                p.setColor(0xFF1A237E);
+                c.drawRect(cx - r * 0.15f, cy - r * 0.08f, cx + r * 0.3f, cy + r * 0.04f, p);
+                p.setColor(0xFFFFFFFF);
+                c.drawRect(cx - r * 0.1f, cy - r * 0.06f, cx + r * 0.08f, cy + r * 0.0f, p);
+                // arms gauntlet
+                p.setColor(0xFFFFEB3B);
+                c.drawRect(cx + r * 0.4f, cy - r * 0.12f, cx + r * 1.05f, cy + r * 0.12f, p);
+                p.setColor(0xFFFF6F00);
+                c.drawCircle(cx + r * 1.1f, cy, r * 0.15f, p);
+                break;
+            }
+            case T_WIZARD: {
+                // robe
+                p.setColor(0xFF6A1B9A);
+                c.drawCircle(cx, cy, r * 0.5f, p);
+                // hat
+                Path tri = new Path();
+                tri.moveTo(cx - r * 0.4f, cy - r * 0.18f);
+                tri.lineTo(cx + r * 0.4f, cy - r * 0.18f);
+                tri.lineTo(cx, cy - r * 1.0f);
+                tri.close();
+                p.setColor(0xFF311B92);
+                c.drawPath(tri, p);
+                p.setColor(0xFFFFEB3B);
+                c.drawCircle(cx + r * 0.05f, cy - r * 0.5f, r * 0.08f, p);
+                c.drawCircle(cx - r * 0.18f, cy - r * 0.32f, r * 0.05f, p);
+                // staff
+                p.setColor(0xFF6D4C41);
+                c.drawRect(cx + r * 0.1f, cy - r * 0.1f, cx + r * 1.0f, cy + r * 0.1f, p);
+                p.setColor(0xFFE040FB);
+                c.drawCircle(cx + r * 1.05f, cy, r * 0.22f, p);
+                p.setColor(0xFFFFFFFF);
+                c.drawCircle(cx + r * 1.05f, cy, r * 0.1f, p);
+                break;
+            }
+        }
+    }
+
+    // ---------------- BG BAKING ----------------
     void bakeBackground() {
         if (screenW <= 0 || screenH <= 0) return;
         if (bgCache != null && (bgCache.getWidth() != screenW || bgCache.getHeight() != screenH)) {
             bgCache.recycle(); bgCache = null;
         }
         if (bgCache == null) {
-            bgCache = Bitmap.createBitmap(screenW, screenH, Bitmap.Config.ARGB_8888);
+            try {
+                bgCache = Bitmap.createBitmap(screenW, screenH, Bitmap.Config.ARGB_8888);
+            } catch (OutOfMemoryError e) { return; }
         }
         Canvas c = new Canvas(bgCache);
         c.drawColor(0xFF000000);
 
         int world = currentMap == null ? 0 : currentMap.world;
         drawBiomeBackground(c, world);
-        drawPath(c, world);
+        drawPathPretty(c, world);
         drawDecorations(c, world);
     }
 
     void drawBiomeBackground(Canvas c, int world) {
-        int top, mid, bot;
+        int top, bot;
         switch (world) {
-            case MapDef.W_DESERT:
-                top = 0xFFFFD180; mid = 0xFFFFCA28; bot = 0xFFFF8F00; break;
-            case MapDef.W_SNOW:
-                top = 0xFFE3F2FD; mid = 0xFFB3E5FC; bot = 0xFF81D4FA; break;
-            case MapDef.W_LAVA:
-                top = 0xFF3E2723; mid = 0xFF5D4037; bot = 0xFF263238; break;
+            case MapDef.W_DESERT: top = 0xFFFFD180; bot = 0xFFE65100; break;
+            case MapDef.W_SNOW:   top = 0xFFE3F2FD; bot = 0xFF4FC3F7; break;
+            case MapDef.W_LAVA:   top = 0xFF3E2723; bot = 0xFF1A0E08; break;
             case MapDef.W_FOREST:
-            default:
-                top = 0xFF66BB6A; mid = 0xFF43A047; bot = 0xFF2E7D32; break;
+            default:              top = 0xFF7CB342; bot = 0xFF1B5E20; break;
         }
         Paint pp = new Paint(Paint.ANTI_ALIAS_FLAG);
-        LinearGradient lg = new LinearGradient(0, topPad, 0, topPad + gameAreaH, top, bot, Shader.TileMode.CLAMP);
+        LinearGradient lg = new LinearGradient(0, hudH, 0, hudH + playH, top, bot, Shader.TileMode.CLAMP);
         pp.setShader(lg);
-        c.drawRect(0, topPad, screenW, topPad + gameAreaH, pp);
+        c.drawRect(0, hudH, playW, hudH + playH, pp);
         pp.setShader(null);
 
-        // Subtle pattern overlay
-        java.util.Random rng = new java.util.Random(world * 1337L + 17);
-        for (int i = 0; i < 220; i++) {
-            float xx = rng.nextFloat() * screenW;
-            float yy = topPad + rng.nextFloat() * gameAreaH;
-            float r = 3 + rng.nextFloat() * 7;
+        // grid hint
+        pp.setColor(0x14000000);
+        for (int gx = 1; gx < COLS; gx++) c.drawLine(gx * tile, hudH, gx * tile, hudH + playH, pp);
+        for (int gy = 1; gy < ROWS; gy++) c.drawLine(0, hudH + gy * tile, playW, hudH + gy * tile, pp);
+
+        // pattern
+        java.util.Random rng = new java.util.Random(world * 7919L + currentMap.name.hashCode());
+        for (int i = 0; i < 300; i++) {
+            float xx = rng.nextFloat() * playW;
+            float yy = hudH + rng.nextFloat() * playH;
+            float rr = 3 + rng.nextFloat() * 7;
             int col;
             switch (world) {
-                case MapDef.W_DESERT: col = (rng.nextBoolean()) ? 0x33FFE082 : 0x44E65100; break;
-                case MapDef.W_SNOW:   col = (rng.nextBoolean()) ? 0x55FFFFFF : 0x4481D4FA; break;
-                case MapDef.W_LAVA:   col = (rng.nextBoolean()) ? 0x66FF6F00 : 0x55000000; break;
-                default:              col = (rng.nextBoolean()) ? 0x552E7D32 : 0x4481C784; break;
+                case MapDef.W_DESERT: col = (rng.nextBoolean()) ? 0x55FFE082 : 0x44BF360C; break;
+                case MapDef.W_SNOW:   col = (rng.nextBoolean()) ? 0x77FFFFFF : 0x4481D4FA; break;
+                case MapDef.W_LAVA:   col = (rng.nextBoolean()) ? 0x88FF6F00 : 0x66000000; break;
+                default:              col = (rng.nextBoolean()) ? 0x552E7D32 : 0x6681C784; break;
             }
             pp.setColor(col);
-            c.drawCircle(xx, yy, r, pp);
+            c.drawCircle(xx, yy, rr, pp);
         }
 
-        // Dune lines for desert / cracks for lava
+        // biome accents
         if (world == MapDef.W_DESERT) {
-            pp.setColor(0x44E65100);
+            pp.setColor(0x55BF360C);
             pp.setStyle(Paint.Style.STROKE);
             pp.setStrokeWidth(3);
             for (int i = 0; i < 8; i++) {
                 Path pa = new Path();
-                float y0 = topPad + (i + 1) * gameAreaH / 9f;
+                float y0 = hudH + (i + 1) * playH / 9f;
                 pa.moveTo(0, y0);
-                for (int k = 1; k <= 8; k++) {
-                    float xx = k * screenW / 8f;
-                    pa.quadTo(xx - screenW / 16f, y0 - 25 + rng.nextFloat() * 20, xx, y0);
+                for (int k = 1; k <= 14; k++) {
+                    float xx = k * playW / 14f;
+                    pa.quadTo(xx - playW / 28f, y0 - 25 + rng.nextFloat() * 20, xx, y0);
                 }
                 c.drawPath(pa, pp);
             }
             pp.setStyle(Paint.Style.FILL);
         } else if (world == MapDef.W_LAVA) {
-            // glowing cracks
-            pp.setColor(0xCCFF6F00);
+            pp.setColor(0xDDFF6F00);
             pp.setStyle(Paint.Style.STROKE);
             pp.setStrokeWidth(4);
-            for (int i = 0; i < 5; i++) {
+            for (int i = 0; i < 6; i++) {
                 Path pa = new Path();
-                float x0 = rng.nextFloat() * screenW;
-                float y0 = topPad + rng.nextFloat() * gameAreaH;
+                float x0 = rng.nextFloat() * playW;
+                float y0 = hudH + rng.nextFloat() * playH;
                 pa.moveTo(x0, y0);
                 for (int k = 0; k < 6; k++) {
                     x0 += (rng.nextFloat() - 0.5f) * 200;
@@ -293,26 +618,20 @@ public class Game {
                 }
                 c.drawPath(pa, pp);
             }
-            pp.setColor(0x88FFEB3B);
-            pp.setStrokeWidth(2);
-            for (int i = 0; i < 5; i++) {
-                Path pa = new Path();
-                float x0 = rng.nextFloat() * screenW;
-                float y0 = topPad + rng.nextFloat() * gameAreaH;
-                pa.moveTo(x0, y0);
-                for (int k = 0; k < 4; k++) {
-                    x0 += (rng.nextFloat() - 0.5f) * 150;
-                    y0 += (rng.nextFloat() - 0.5f) * 150;
-                    pa.lineTo(x0, y0);
-                }
-                c.drawPath(pa, pp);
-            }
             pp.setStyle(Paint.Style.FILL);
+        } else if (world == MapDef.W_SNOW) {
+            // soft snow patches
+            pp.setColor(0x55FFFFFF);
+            for (int i = 0; i < 20; i++) {
+                float xx = rng.nextFloat() * playW;
+                float yy = hudH + rng.nextFloat() * playH;
+                c.drawCircle(xx, yy, 30 + rng.nextFloat() * 50, pp);
+            }
         }
     }
 
-    void drawPath(Canvas c, int world) {
-        if (path.isEmpty()) return;
+    void drawPathPretty(Canvas c, int world) {
+        if (path.size() < 2) return;
         Paint pp = new Paint(Paint.ANTI_ALIAS_FLAG);
         Path p = new Path();
         p.moveTo(path.get(0).x, path.get(0).y);
@@ -320,66 +639,107 @@ public class Game {
 
         int outerCol, innerCol, edgeCol;
         switch (world) {
-            case MapDef.W_DESERT: outerCol = 0xFF6D4C41; innerCol = 0xFFA1887F; edgeCol = 0xFF4E342E; break;
-            case MapDef.W_SNOW:   outerCol = 0xFF607D8B; innerCol = 0xFFB0BEC5; edgeCol = 0xFF37474F; break;
-            case MapDef.W_LAVA:   outerCol = 0xFF263238; innerCol = 0xFF455A64; edgeCol = 0xFF000000; break;
+            case MapDef.W_DESERT: outerCol = 0xFF6D4C41; innerCol = 0xFFA1887F; edgeCol = 0xFF3E2723; break;
+            case MapDef.W_SNOW:   outerCol = 0xFF607D8B; innerCol = 0xFFB0BEC5; edgeCol = 0xFF263238; break;
+            case MapDef.W_LAVA:   outerCol = 0xFF212121; innerCol = 0xFF424242; edgeCol = 0xFF000000; break;
             default:              outerCol = 0xFF5D4037; innerCol = 0xFF8D6E63; edgeCol = 0xFF3E2723; break;
         }
-        // outer
         pp.setStyle(Paint.Style.STROKE);
         pp.setStrokeCap(Paint.Cap.ROUND);
         pp.setStrokeJoin(Paint.Join.ROUND);
+
+        // thick shadow
+        pp.setColor(0x66000000);
+        pp.setStrokeWidth(tile * 1.05f);
+        c.save();
+        c.translate(4, 6);
+        c.drawPath(p, pp);
+        c.restore();
+
         pp.setColor(edgeCol);
-        pp.setStrokeWidth(tile * 1.02f);
+        pp.setStrokeWidth(tile * 0.98f);
         c.drawPath(p, pp);
         pp.setColor(outerCol);
-        pp.setStrokeWidth(tile * 0.92f);
+        pp.setStrokeWidth(tile * 0.88f);
         c.drawPath(p, pp);
         pp.setColor(innerCol);
-        pp.setStrokeWidth(tile * 0.72f);
+        pp.setStrokeWidth(tile * 0.66f);
         c.drawPath(p, pp);
+        // top highlight stripe
+        pp.setColor(0x44FFFFFF);
+        pp.setStrokeWidth(tile * 0.18f);
+        pp.setStyle(Paint.Style.STROKE);
+        c.save();
+        c.translate(0, -tile * 0.16f);
+        c.drawPath(p, pp);
+        c.restore();
         // dashed center
         Paint dashP = new Paint(Paint.ANTI_ALIAS_FLAG);
         dashP.setStyle(Paint.Style.STROKE);
-        dashP.setColor(0x66FFFFFF);
-        dashP.setStrokeWidth(tile * 0.06f);
-        dashP.setPathEffect(new android.graphics.DashPathEffect(new float[]{tile * 0.35f, tile * 0.35f}, 0));
+        dashP.setColor(0x99FFFFFF);
+        dashP.setStrokeWidth(tile * 0.05f);
+        dashP.setPathEffect(new android.graphics.DashPathEffect(new float[]{tile * 0.3f, tile * 0.3f}, 0));
         c.drawPath(p, dashP);
 
-        // little stones along the edge
-        java.util.Random rng = new java.util.Random(7);
+        // entry/exit markers (arrow & flag)
+        if (path.size() >= 2) {
+            PointF p0 = path.get(0), p1 = path.get(1);
+            float ax = p0.x, ay = p0.y;
+            float dx = p1.x - p0.x, dy = p1.y - p0.y;
+            float l = (float) Math.sqrt(dx * dx + dy * dy);
+            if (l > 0.001f) {
+                dx /= l; dy /= l;
+                pp.setStyle(Paint.Style.FILL);
+                pp.setColor(0xFFFFEB3B);
+                Path tri = new Path();
+                tri.moveTo(ax + dx * tile * 0.4f, ay + dy * tile * 0.4f);
+                tri.lineTo(ax + dx * tile * 0.05f - dy * tile * 0.25f, ay + dy * tile * 0.05f + dx * tile * 0.25f);
+                tri.lineTo(ax + dx * tile * 0.05f + dy * tile * 0.25f, ay + dy * tile * 0.05f - dx * tile * 0.25f);
+                tri.close();
+                c.drawPath(tri, pp);
+            }
+            // exit flag
+            PointF pn = path.get(path.size() - 1);
+            pp.setColor(0xFFE53935);
+            pp.setStyle(Paint.Style.FILL);
+            c.drawRect(pn.x - tile * 0.25f, pn.y - tile * 0.4f, pn.x + tile * 0.25f, pn.y - tile * 0.05f, pp);
+            pp.setColor(0xFFFFFFFF);
+            c.drawRect(pn.x - tile * 0.2f, pn.y - tile * 0.35f, pn.x - tile * 0.05f, pn.y - tile * 0.1f, pp);
+        }
+
+        // stones along the path edges
+        java.util.Random rng = new java.util.Random(world * 13 + 11);
         pp.setStyle(Paint.Style.FILL);
-        pp.setColor(world == MapDef.W_SNOW ? 0xFFFFFFFF : 0xFF6D4C41);
+        pp.setColor(world == MapDef.W_SNOW ? 0xFFFFFFFF : (world == MapDef.W_LAVA ? 0xFF424242 : 0xFF6D4C41));
         for (int i = 0; i < path.size() - 1; i++) {
             PointF a = path.get(i), b = path.get(i + 1);
             float d = segLen[i];
-            int n = (int) (d / (tile * 0.4f));
+            int n = (int) (d / (tile * 0.45f));
             for (int k = 0; k <= n; k++) {
                 float t = (float) k / Math.max(1, n);
                 float xx = a.x + (b.x - a.x) * t;
                 float yy = a.y + (b.y - a.y) * t;
-                // perpendicular offset
-                float dx = b.x - a.x, dy = b.y - a.y;
-                float l = (float) Math.sqrt(dx * dx + dy * dy);
-                if (l < 0.01) continue;
-                float nx = -dy / l, ny = dx / l;
+                float dxx = b.x - a.x, dyy = b.y - a.y;
+                float ll = (float) Math.sqrt(dxx * dxx + dyy * dyy);
+                if (ll < 0.01) continue;
+                float nx = -dyy / ll, ny = dxx / ll;
                 float side = (k % 2 == 0) ? 1f : -1f;
-                float ox = xx + nx * tile * 0.42f * side;
-                float oy = yy + ny * tile * 0.42f * side;
-                c.drawCircle(ox, oy, tile * (0.04f + rng.nextFloat() * 0.04f), pp);
+                float ox = xx + nx * tile * 0.45f * side;
+                float oy = yy + ny * tile * 0.45f * side;
+                c.drawCircle(ox, oy, tile * (0.05f + rng.nextFloat() * 0.04f), pp);
             }
         }
     }
 
     void drawDecorations(Canvas c, int world) {
         Paint pp = new Paint(Paint.ANTI_ALIAS_FLAG);
-        java.util.Random rng = new java.util.Random(currentMap == null ? 0 : currentMap.name.hashCode());
+        java.util.Random rng = new java.util.Random(currentMap == null ? 0 : currentMap.name.hashCode() + 7);
         for (int gx = 0; gx < COLS; gx++) {
-            for (int gy = 0; gy < MapDef.MAP_ROWS; gy++) {
+            for (int gy = 0; gy < ROWS; gy++) {
                 if (blocked[gx][gy]) continue;
-                if (rng.nextFloat() > 0.35f) continue;
-                float cx = gridCenterX(gx) + (rng.nextFloat() - 0.5f) * tile * 0.5f;
-                float cy = gridCenterY(gy) + (rng.nextFloat() - 0.5f) * tile * 0.5f;
+                if (rng.nextFloat() > 0.55f) continue;
+                float cx = gridCenterX(gx) + (rng.nextFloat() - 0.5f) * tile * 0.4f;
+                float cy = gridCenterY(gy) + (rng.nextFloat() - 0.5f) * tile * 0.4f;
                 drawDecor(c, pp, cx, cy, world, rng);
             }
         }
@@ -388,66 +748,71 @@ public class Game {
     void drawDecor(Canvas c, Paint pp, float cx, float cy, int world, java.util.Random rng) {
         switch (world) {
             case MapDef.W_FOREST: {
-                if (rng.nextFloat() < 0.4f) {
+                if (rng.nextFloat() < 0.5f) {
                     // tree
                     pp.setColor(0x44000000);
-                    c.drawCircle(cx + 4, cy + 6, tile * 0.25f, pp);
+                    c.drawCircle(cx + 4, cy + 6, tile * 0.32f, pp);
                     pp.setColor(0xFF1B5E20);
-                    c.drawCircle(cx, cy, tile * 0.27f, pp);
+                    c.drawCircle(cx, cy, tile * 0.32f, pp);
                     pp.setColor(0xFF2E7D32);
-                    c.drawCircle(cx - tile * 0.07f, cy - tile * 0.08f, tile * 0.2f, pp);
-                    pp.setColor(0xFF4CAF50);
-                    c.drawCircle(cx - tile * 0.15f, cy - tile * 0.16f, tile * 0.1f, pp);
+                    c.drawCircle(cx - tile * 0.07f, cy - tile * 0.09f, tile * 0.24f, pp);
+                    pp.setColor(0xFF66BB6A);
+                    c.drawCircle(cx - tile * 0.15f, cy - tile * 0.18f, tile * 0.14f, pp);
                     pp.setColor(0xFF5D4037);
-                    c.drawRect(cx - tile * 0.04f, cy + tile * 0.18f, cx + tile * 0.04f, cy + tile * 0.3f, pp);
-                } else if (rng.nextFloat() < 0.5f) {
-                    // bush
+                    c.drawRect(cx - tile * 0.05f, cy + tile * 0.2f, cx + tile * 0.05f, cy + tile * 0.34f, pp);
+                } else if (rng.nextFloat() < 0.6f) {
                     pp.setColor(0xFF2E7D32);
                     c.drawCircle(cx, cy, tile * 0.18f, pp);
                     pp.setColor(0xFF66BB6A);
                     c.drawCircle(cx - tile * 0.05f, cy - tile * 0.06f, tile * 0.1f, pp);
                 } else {
-                    // flowers
-                    int[] cols = {0xFFFFEB3B, 0xFFE53935, 0xFFFFFFFF, 0xFFE91E63};
+                    int[] cols = {0xFFFFEB3B, 0xFFE53935, 0xFFFFFFFF, 0xFFE91E63, 0xFFAB47BC};
                     pp.setColor(cols[rng.nextInt(cols.length)]);
-                    c.drawCircle(cx, cy, tile * 0.06f, pp);
+                    c.drawCircle(cx, cy, tile * 0.07f, pp);
                     pp.setColor(0xFFFFEB3B);
-                    c.drawCircle(cx, cy, tile * 0.03f, pp);
+                    c.drawCircle(cx, cy, tile * 0.035f, pp);
                 }
                 break;
             }
             case MapDef.W_DESERT: {
-                if (rng.nextFloat() < 0.3f) {
-                    // cactus
+                if (rng.nextFloat() < 0.4f) {
+                    pp.setColor(0x55000000);
+                    c.drawRoundRect(cx - tile * 0.08f, cy + tile * 0.2f, cx + tile * 0.08f, cy + tile * 0.32f, 4, 4, pp);
                     pp.setColor(0xFF2E7D32);
-                    c.drawRoundRect(cx - tile * 0.07f, cy - tile * 0.28f, cx + tile * 0.07f, cy + tile * 0.25f, 10, 10, pp);
+                    c.drawRoundRect(cx - tile * 0.09f, cy - tile * 0.3f, cx + tile * 0.09f, cy + tile * 0.27f, 12, 12, pp);
                     if (rng.nextBoolean()) {
-                        c.drawRoundRect(cx + tile * 0.06f, cy - tile * 0.1f, cx + tile * 0.22f, cy, 8, 8, pp);
-                        c.drawRoundRect(cx + tile * 0.16f, cy - tile * 0.2f, cx + tile * 0.22f, cy, 8, 8, pp);
+                        c.drawRoundRect(cx + tile * 0.08f, cy - tile * 0.12f, cx + tile * 0.24f, cy + tile * 0.02f, 8, 8, pp);
+                        c.drawRoundRect(cx + tile * 0.17f, cy - tile * 0.22f, cx + tile * 0.24f, cy + tile * 0.02f, 8, 8, pp);
                     }
-                    pp.setColor(0xFFE8F5E9);
+                    pp.setColor(0xFF1B5E20);
                     for (int i = 0; i < 4; i++)
-                        c.drawCircle(cx, cy - tile * 0.2f + i * tile * 0.13f, 2, pp);
-                } else if (rng.nextFloat() < 0.5f) {
+                        c.drawCircle(cx, cy - tile * 0.22f + i * tile * 0.13f, 3, pp);
+                    // flower
+                    if (rng.nextFloat() < 0.4f) {
+                        pp.setColor(0xFFE91E63);
+                        c.drawCircle(cx, cy - tile * 0.35f, tile * 0.04f, pp);
+                    }
+                } else {
                     pp.setColor(0xFFBCAAA4);
                     c.drawCircle(cx, cy, tile * 0.1f, pp);
                     pp.setColor(0xFF6D4C41);
-                    c.drawCircle(cx - tile * 0.03f, cy - tile * 0.03f, tile * 0.06f, pp);
+                    c.drawCircle(cx - tile * 0.03f, cy - tile * 0.03f, tile * 0.07f, pp);
+                    pp.setColor(0xFF8D6E63);
+                    c.drawCircle(cx + tile * 0.04f, cy + tile * 0.02f, tile * 0.04f, pp);
                 }
                 break;
             }
             case MapDef.W_SNOW: {
-                if (rng.nextFloat() < 0.4f) {
-                    // pine tree
+                if (rng.nextFloat() < 0.5f) {
                     pp.setColor(0x44000000);
-                    c.drawCircle(cx + 4, cy + 5, tile * 0.2f, pp);
-                    Path tri = new Path();
+                    c.drawCircle(cx + 3, cy + 5, tile * 0.25f, pp);
                     pp.setColor(0xFF1B5E20);
+                    Path tri = new Path();
                     for (int k = 0; k < 3; k++) {
                         tri.reset();
-                        float w = tile * (0.22f - k * 0.04f);
-                        float yTop = cy - tile * 0.3f + k * tile * 0.12f;
-                        float yBot = yTop + tile * 0.18f;
+                        float w = tile * (0.26f - k * 0.05f);
+                        float yTop = cy - tile * 0.35f + k * tile * 0.14f;
+                        float yBot = yTop + tile * 0.22f;
                         tri.moveTo(cx - w, yBot);
                         tri.lineTo(cx + w, yBot);
                         tri.lineTo(cx, yTop);
@@ -455,36 +820,48 @@ public class Game {
                         c.drawPath(tri, pp);
                     }
                     pp.setColor(0xFF5D4037);
-                    c.drawRect(cx - tile * 0.04f, cy + tile * 0.1f, cx + tile * 0.04f, cy + tile * 0.22f, pp);
-                    // snow cap
+                    c.drawRect(cx - tile * 0.04f, cy + tile * 0.12f, cx + tile * 0.04f, cy + tile * 0.24f, pp);
                     pp.setColor(0xFFFFFFFF);
-                    c.drawCircle(cx, cy - tile * 0.27f, tile * 0.06f, pp);
+                    c.drawCircle(cx, cy - tile * 0.33f, tile * 0.06f, pp);
+                    // snow tufts on branches
+                    for (int k = 0; k < 3; k++) {
+                        float w = tile * (0.26f - k * 0.05f);
+                        float yBot = cy - tile * 0.13f + k * tile * 0.14f;
+                        c.drawCircle(cx - w + 3, yBot, tile * 0.045f, pp);
+                        c.drawCircle(cx + w - 3, yBot, tile * 0.045f, pp);
+                    }
                 } else {
                     pp.setColor(0xFFFFFFFF);
-                    c.drawCircle(cx, cy, tile * 0.1f, pp);
+                    c.drawCircle(cx, cy, tile * 0.12f, pp);
                     pp.setColor(0xFFE0F2F1);
-                    c.drawCircle(cx + tile * 0.05f, cy + tile * 0.05f, tile * 0.06f, pp);
+                    c.drawCircle(cx + tile * 0.06f, cy + tile * 0.06f, tile * 0.06f, pp);
+                    if (rng.nextFloat() < 0.3f) {
+                        pp.setColor(0xFF263238);
+                        c.drawCircle(cx + tile * 0.06f, cy - tile * 0.04f, tile * 0.02f, pp);
+                        c.drawCircle(cx - tile * 0.04f, cy - tile * 0.04f, tile * 0.02f, pp);
+                    }
                 }
                 break;
             }
             case MapDef.W_LAVA: {
-                if (rng.nextFloat() < 0.35f) {
-                    // jagged rock
+                if (rng.nextFloat() < 0.45f) {
                     pp.setColor(0xFF424242);
                     Path pa = new Path();
-                    pa.moveTo(cx - tile * 0.2f, cy + tile * 0.1f);
-                    pa.lineTo(cx - tile * 0.05f, cy - tile * 0.15f);
+                    pa.moveTo(cx - tile * 0.22f, cy + tile * 0.12f);
+                    pa.lineTo(cx - tile * 0.05f, cy - tile * 0.18f);
                     pa.lineTo(cx + tile * 0.1f, cy - tile * 0.05f);
-                    pa.lineTo(cx + tile * 0.2f, cy + tile * 0.12f);
+                    pa.lineTo(cx + tile * 0.22f, cy + tile * 0.14f);
                     pa.close();
                     c.drawPath(pa, pp);
                     pp.setColor(0xFFFF6F00);
                     c.drawCircle(cx, cy + tile * 0.08f, tile * 0.03f, pp);
-                } else if (rng.nextFloat() < 0.4f) {
+                } else {
                     pp.setColor(0xCCFF6F00);
-                    c.drawCircle(cx, cy, tile * 0.08f, pp);
+                    c.drawCircle(cx, cy, tile * 0.1f, pp);
                     pp.setColor(0xFFFFEB3B);
-                    c.drawCircle(cx, cy, tile * 0.04f, pp);
+                    c.drawCircle(cx, cy, tile * 0.05f, pp);
+                    pp.setColor(0x88FFFFFF);
+                    c.drawCircle(cx - tile * 0.03f, cy - tile * 0.03f, tile * 0.02f, pp);
                 }
                 break;
             }
@@ -493,38 +870,39 @@ public class Game {
 
     // ---------------- WAVES ----------------
     int[][] waveDef(int w) {
-        int[][] base;
         switch (w) {
-            case 1:  base = new int[][]{{B_RED, 14}}; break;
-            case 2:  base = new int[][]{{B_RED, 22}}; break;
-            case 3:  base = new int[][]{{B_RED, 12}, {B_BLUE, 8}}; break;
-            case 4:  base = new int[][]{{B_BLUE, 16}}; break;
-            case 5:  base = new int[][]{{B_RED, 30}}; break;
-            case 6:  base = new int[][]{{B_BLUE, 14}, {B_GREEN, 8}}; break;
-            case 7:  base = new int[][]{{B_GREEN, 16}}; break;
-            case 8:  base = new int[][]{{B_BLUE, 20}, {B_GREEN, 12}}; break;
-            case 9:  base = new int[][]{{B_GREEN, 22}, {B_YELLOW, 6}}; break;
-            case 10: base = new int[][]{{B_YELLOW, 18}}; break;
-            case 11: base = new int[][]{{B_GREEN, 22}, {B_YELLOW, 12}}; break;
-            case 12: base = new int[][]{{B_YELLOW, 26}, {B_PINK, 8}}; break;
-            case 13: base = new int[][]{{B_PINK, 22}}; break;
-            case 14: base = new int[][]{{B_BLACK, 12}, {B_YELLOW, 16}}; break;
-            case 15: base = new int[][]{{B_PINK, 26}, {B_BLACK, 10}}; break;
-            case 16: base = new int[][]{{B_LEAD, 8}, {B_PINK, 20}}; break;
-            case 17: base = new int[][]{{B_BLACK, 18}, {B_PINK, 22}}; break;
-            case 18: base = new int[][]{{B_LEAD, 14}, {B_BLACK, 14}}; break;
-            case 19: base = new int[][]{{B_PINK, 50}, {B_BLACK, 24}}; break;
-            case 20: base = new int[][]{{B_MOAB, 1}, {B_PINK, 22}}; break;
-            default: base = new int[][]{{B_MOAB, 1 + (w - 20) / 2}, {B_PINK, 30}};
+            case 1:  return new int[][]{{B_RED, 16}};
+            case 2:  return new int[][]{{B_RED, 24}};
+            case 3:  return new int[][]{{B_RED, 14}, {B_BLUE, 8}};
+            case 4:  return new int[][]{{B_BLUE, 18}};
+            case 5:  return new int[][]{{B_RED, 32}};
+            case 6:  return new int[][]{{B_BLUE, 16}, {B_GREEN, 8}};
+            case 7:  return new int[][]{{B_GREEN, 18}};
+            case 8:  return new int[][]{{B_BLUE, 22}, {B_GREEN, 12}};
+            case 9:  return new int[][]{{B_GREEN, 24}, {B_YELLOW, 6}};
+            case 10: return new int[][]{{B_YELLOW, 20}};
+            case 11: return new int[][]{{B_GREEN, 24}, {B_YELLOW, 12}};
+            case 12: return new int[][]{{B_YELLOW, 28}, {B_PINK, 8}};
+            case 13: return new int[][]{{B_PINK, 22}};
+            case 14: return new int[][]{{B_BLACK, 12}, {B_YELLOW, 16}};
+            case 15: return new int[][]{{B_PINK, 28}, {B_BLACK, 10}};
+            case 16: return new int[][]{{B_LEAD, 8}, {B_PINK, 22}};
+            case 17: return new int[][]{{B_BLACK, 18}, {B_PINK, 22}};
+            case 18: return new int[][]{{B_LEAD, 14}, {B_BLACK, 14}};
+            case 19: return new int[][]{{B_PINK, 50}, {B_BLACK, 24}};
+            case 20: return new int[][]{{B_MOAB, 1}, {B_PINK, 22}};
+            default: return new int[][]{{B_MOAB, 1 + (w - 20) / 2}, {B_PINK, 30}};
         }
-        return base;
     }
 
     void startWave() {
         if (waveActive || gameOver) return;
+        if (path.size() < 2) return;
         wave++;
         waveQueue.clear();
-        for (int[] r : waveDef(wave)) waveQueue.add(new int[]{r[0], r[1]});
+        int[][] def = waveDef(wave);
+        if (def == null || def.length == 0) return;
+        for (int[] r : def) waveQueue.add(new int[]{r[0], r[1]});
         waveQueueIdx = 0;
         waveQueueT = 0f;
         waveQueueRemaining = waveQueue.get(0)[1];
@@ -539,8 +917,19 @@ public class Game {
 
     // ---------------- UPDATE ----------------
     public void update(float dt) {
-        if (state == S_MENU) return;
+        try {
+            doUpdate(dt);
+        } catch (Throwable t) {
+            popupMessage = "ERR: " + t.getClass().getSimpleName() + " " + t.getMessage();
+            popupTimer = 4f;
+        }
+    }
+    void doUpdate(float dt) {
+        totalTime += dt;
+        menuAnim += dt;
+        if (state != S_PLAYING) return;
         if (paused || gameOver) return;
+        if (tile <= 0) return;
         dt *= speedMult;
 
         if (waveActive) {
@@ -561,24 +950,16 @@ public class Game {
                 waveActive = false;
                 int bonus = 100 + wave * 15;
                 cash += bonus;
+                totalCoins += 20 + wave * 4;
                 if (wave >= 20) { victory = true; gameOver = true; flash("VICTORY!"); }
-                else flash("Complete +$" + bonus);
+                else flash("Wave +$" + bonus);
             }
         }
 
-        // bloons (indexed loop; pending added at end)
-        for (int i = 0; i < bloons.size(); i++) {
-            Bloon b = bloons.get(i);
-            b.update(dt, this);
-        }
-
-        // towers
+        for (int i = 0; i < bloons.size(); i++) bloons.get(i).update(dt, this);
         for (int i = 0; i < towers.size(); i++) towers.get(i).update(dt, this);
-
-        // projectiles
         for (int i = 0; i < projectiles.size(); i++) projectiles.get(i).update(dt, this);
 
-        // merge pending lists (initialize positions so we never draw at (0,0))
         if (!pendingBloons.isEmpty()) {
             for (int i = 0; i < pendingBloons.size(); i++) {
                 Bloon nb = pendingBloons.get(i);
@@ -588,9 +969,11 @@ public class Game {
             bloons.addAll(pendingBloons);
             pendingBloons.clear();
         }
-        if (!pendingProjectiles.isEmpty()) { projectiles.addAll(pendingProjectiles); pendingProjectiles.clear(); }
+        if (!pendingProjectiles.isEmpty()) {
+            projectiles.addAll(pendingProjectiles);
+            pendingProjectiles.clear();
+        }
 
-        // remove escaped/dead bloons & dead projectiles
         for (int i = bloons.size() - 1; i >= 0; i--) {
             Bloon b = bloons.get(i);
             if (b.escaped) {
@@ -604,8 +987,6 @@ public class Game {
         for (int i = projectiles.size() - 1; i >= 0; i--) {
             if (projectiles.get(i).dead) projectiles.remove(i);
         }
-
-        // floaters
         for (int i = floaters.size() - 1; i >= 0; i--) {
             Floater f = floaters.get(i);
             f.t += dt; f.y -= 32 * dt;
@@ -618,44 +999,50 @@ public class Game {
     // ---------------- DRAW ----------------
     public void draw(Canvas c) {
         if (c == null) return;
-        if (tile <= 0 || screenW <= 0) { c.drawColor(0xFF000000); return; }
-        if (state == S_MENU) { drawMenu(c); return; }
-        drawGame(c);
+        try {
+            doDraw(c);
+        } catch (Throwable t) {
+            c.drawColor(0xFF000000);
+            textP.setColor(0xFFFF5252);
+            textP.setTextSize(28);
+            c.drawText("Render error: " + t.getClass().getSimpleName(), 20, 60, textP);
+            c.drawText(String.valueOf(t.getMessage()), 20, 100, textP);
+        }
+    }
+    void doDraw(Canvas c) {
+        if (tile <= 0 || screenW <= 0) { c.drawColor(0xFF1A237E); return; }
+        switch (state) {
+            case S_MAIN:    drawMainMenu(c);  break;
+            case S_MAPS:    drawMapsMenu(c);  break;
+            case S_TOWERS:  drawTowersMenu(c); break;
+            case S_HOWTO:   drawHowToMenu(c); break;
+            case S_PLAYING: drawGame(c);      break;
+        }
     }
 
     void drawGame(Canvas c) {
         if (bgCache != null) c.drawBitmap(bgCache, 0, 0, null);
         else c.drawColor(0xFF2E7D32);
 
-        // HUD
-        drawHUD(c);
-
         // placement preview
-        if (placingTowerType >= 0 && lastTouchY > topPad && lastTouchY < topPad + gameAreaH) {
+        if (placingTowerType >= 0 && lastTouchX < playW && lastTouchY > hudH && lastTouchY < hudH + playH) {
             int cx = (int) (lastTouchX / tile);
-            int cy = (int) ((lastTouchY - topPad) / tileH());
+            int cy = (int) ((lastTouchY - hudH) / tile);
             if (inGrid(cx, cy)) {
                 boolean ok = canPlace(cx, cy);
                 paint.setShader(null);
                 paint.setColor(ok ? 0x6644FF44 : 0x66FF4444);
-                c.drawRect(cx * tile, topPad + cy * tileH(), (cx + 1) * tile, topPad + (cy + 1) * tileH(), paint);
+                c.drawRect(cx * tile, hudH + cy * tile, (cx + 1) * tile, hudH + (cy + 1) * tile, paint);
                 paint.setColor(0x44FFFFFF);
-                float pr = new Tower(placingTowerType, 0, 0, 0, 0).baseRange();
-                if (pr > screenW) pr = screenW;
+                float pr = Math.min(playW, new Tower(placingTowerType, 0, 0, 0, 0).baseRange());
                 c.drawCircle(gridCenterX(cx), gridCenterY(cy), pr, paint);
             }
         }
 
-        // towers
         for (int i = 0; i < towers.size(); i++) towers.get(i).draw(c, paint, this);
-
-        // bloons (back-to-front by dAlong asc so leaders appear in front)
-        for (int i = 0; i < bloons.size(); i++) bloons.get(i).draw(c, paint);
-
-        // projectiles
+        for (int i = 0; i < bloons.size(); i++) bloons.get(i).draw(c, paint, this);
         for (int i = 0; i < projectiles.size(); i++) projectiles.get(i).draw(c, paint);
 
-        // selected tower range
         if (selectedTower != null) {
             paint.setShader(null);
             paint.setColor(0x22FFFFFF);
@@ -667,7 +1054,6 @@ public class Game {
             paint.setStyle(Paint.Style.FILL);
         }
 
-        // floaters
         for (int i = 0; i < floaters.size(); i++) {
             Floater f = floaters.get(i);
             int alpha = (int) (255 * (1 - f.t));
@@ -677,219 +1063,366 @@ public class Game {
             c.drawText(f.text, f.x, f.y, textP);
         }
         textP.setColor(Color.WHITE);
-        textP.setTextSize(tile * 0.42f);
+        textP.setTextSize(tile * 0.38f);
 
-        // bottom UI
+        drawHUD(c);
+
         if (selectedTower != null) drawUpgradePanel(c);
         else drawTowerBar(c);
 
         if (popupTimer > 0 && popupMessage != null) {
-            textP.setTextSize(tile * 0.9f);
+            textP.setTextSize(tile * 0.7f);
             float w = textP.measureText(popupMessage);
+            paint.setShader(null);
             paint.setColor(0xCC000000);
-            c.drawRoundRect(new RectF(screenW / 2f - w / 2 - 30, topPad + gameAreaH / 2 - tile, screenW / 2f + w / 2 + 30, topPad + gameAreaH / 2 + tile * 0.3f), 20, 20, paint);
+            c.drawRoundRect(new RectF(playW / 2f - w / 2 - 30, hudH + playH / 2 - tile, playW / 2f + w / 2 + 30, hudH + playH / 2 + tile * 0.3f), 20, 20, paint);
             textP.setColor(0xFFFFEB3B);
-            c.drawText(popupMessage, screenW / 2f - w / 2, topPad + gameAreaH / 2, textP);
+            c.drawText(popupMessage, playW / 2f - w / 2, hudH + playH / 2, textP);
             textP.setColor(Color.WHITE);
-            textP.setTextSize(tile * 0.42f);
+            textP.setTextSize(tile * 0.38f);
         }
 
         if (gameOver) {
             paint.setColor(0xCC000000);
             c.drawRect(0, 0, screenW, screenH, paint);
-            textP.setTextSize(tile * 1.4f);
-            String msg = victory ? "VICTORY!" : "GAME OVER";
+            textP.setTextSize(tile * 1.2f);
+            String msg = victory ? "VICTORY!" : "DEFEAT";
             float w = textP.measureText(msg);
             textP.setColor(victory ? 0xFF4CAF50 : 0xFFE53935);
             c.drawText(msg, screenW / 2f - w / 2, screenH / 2f - tile, textP);
-            textP.setTextSize(tile * 0.55f);
+            textP.setTextSize(tile * 0.5f);
             textP.setColor(Color.WHITE);
-            String s2 = "Score: " + score + "  Wave: " + wave;
+            String s2 = "Score " + score + " · Wave " + wave;
             float w2 = textP.measureText(s2);
             c.drawText(s2, screenW / 2f - w2 / 2, screenH / 2f, textP);
-            // restart/menu buttons
             float by = screenH / 2f + tile * 0.8f;
-            drawBtnLabel(c, screenW / 2f - tile * 2.5f, by, tile * 2.2f, tile * 0.9f, "Restart", 0xFF388E3C);
-            drawBtnLabel(c, screenW / 2f + tile * 0.3f, by, tile * 2.2f, tile * 0.9f, "Menu", 0xFF1976D2);
-            textP.setTextSize(tile * 0.42f);
+            drawPillButton(c, screenW / 2f - tile * 2.7f, by, tile * 2.4f, tile * 0.9f, "RESTART", 0xFF388E3C);
+            drawPillButton(c, screenW / 2f + tile * 0.3f, by, tile * 2.4f, tile * 0.9f, "MENU", 0xFF1976D2);
+            textP.setTextSize(tile * 0.38f);
         }
     }
 
     void drawHUD(Canvas c) {
         paint.setShader(null);
-        LinearGradient lg = new LinearGradient(0, 0, 0, topPad, 0xFF1B5E20, 0xFF2E7D32, Shader.TileMode.CLAMP);
+        LinearGradient lg = new LinearGradient(0, 0, 0, hudH, 0xFF0D47A1, 0xFF1565C0, Shader.TileMode.CLAMP);
         paint.setShader(lg);
-        c.drawRect(0, 0, screenW, topPad, paint);
+        c.drawRect(0, 0, screenW, hudH, paint);
         paint.setShader(null);
-        paint.setColor(0x88000000);
-        c.drawRect(0, topPad - 4, screenW, topPad, paint);
+        paint.setColor(0xFF0D47A1);
+        c.drawRect(0, hudH - 4, screenW, hudH, paint);
 
-        textP.setTextSize(tile * 0.5f);
-        textP.setColor(0xFFFFEB3B);
-        c.drawText("$ " + cash, 24, topPad * 0.55f, textP);
-        textP.setColor(0xFFFF5252);
-        c.drawText("♥ " + lives, screenW * 0.33f, topPad * 0.55f, textP);
-        textP.setColor(0xFFFFFFFF);
-        c.drawText("Wave " + wave + "/20", screenW * 0.57f, topPad * 0.55f, textP);
-        textP.setColor(0xFF80DEEA);
-        textP.setTextSize(tile * 0.38f);
-        c.drawText(currentMap != null ? currentMap.name : "", 24, topPad * 0.92f, textP);
-        c.drawText("Score " + score, screenW * 0.33f, topPad * 0.92f, textP);
+        // currency bubbles
+        drawCoinBubble(c, 20, hudH * 0.5f, "$" + cash, 0xFFFFEB3B);
+        drawHeartBubble(c, 20 + tile * 2.6f, hudH * 0.5f, lives);
+        textP.setColor(Color.WHITE);
+        textP.setTextSize(hudH * 0.42f);
+        textP.setFakeBoldText(true);
+        c.drawText("Wave " + Math.max(1, wave) + "/20", 20 + tile * 5.0f, hudH * 0.62f, textP);
+        textP.setFakeBoldText(false);
+        textP.setTextSize(hudH * 0.3f);
+        textP.setColor(0xFFB3E5FC);
+        c.drawText("Score " + score + "  ·  " + (currentMap != null ? currentMap.name : ""),
+                20 + tile * 5.0f, hudH * 0.92f, textP);
 
-        float bx = screenW - tile * 1.05f;
-        drawBtnLabel(c, bx, 10, tile * 0.95f, tile * 0.5f,
+        float bw = tile * 1.15f;
+        float bh = hudH * 0.6f;
+        float by = hudH * 0.2f;
+        float bx = screenW - bw - 10;
+        drawPillButton(c, bx, by, bw, bh,
                 speedMult == 1f ? ">" : (speedMult == 2f ? ">>" : ">>>"), 0xFF1976D2);
-        bx -= tile * 1.05f;
-        drawBtnLabel(c, bx, 10, tile * 0.95f, tile * 0.5f, paused ? "▶" : "❚❚", 0xFF455A64);
-        bx -= tile * 1.05f;
-        drawBtnLabel(c, bx, 10, tile * 0.95f, tile * 0.5f, waveActive ? "..." : "GO", waveActive ? 0xFF757575 : 0xFFE53935);
-        bx -= tile * 1.05f;
-        drawBtnLabel(c, bx, 10, tile * 0.95f, tile * 0.5f, "≡", 0xFF607D8B);
+        bx -= bw + 10;
+        drawPillButton(c, bx, by, bw, bh, paused ? "▶" : "❚❚", 0xFF455A64);
+        bx -= bw + 10;
+        drawPillButton(c, bx, by, bw, bh, waveActive ? "..." : "GO!", waveActive ? 0xFF616161 : 0xFFE53935);
+        bx -= bw + 10;
+        drawPillButton(c, bx, by, bw, bh, "MENU", 0xFF607D8B);
+        textP.setTextSize(tile * 0.38f);
     }
 
-    void drawBtnLabel(Canvas c, float x, float y, float w, float h, String label, int color) {
-        paint.setShader(null);
-        paint.setColor(0x55000000);
-        c.drawRoundRect(new RectF(x + 2, y + 3, x + w + 2, y + h + 3), 12, 12, paint);
-        paint.setColor(color);
-        c.drawRoundRect(new RectF(x, y, x + w, y + h), 12, 12, paint);
-        paint.setColor(0x33FFFFFF);
-        c.drawRoundRect(new RectF(x + 2, y + 2, x + w - 2, y + h * 0.5f), 10, 10, paint);
+    void drawCoinBubble(Canvas c, float x, float y, String label, int color) {
+        Paint p = paint;
+        p.setShader(null);
+        p.setColor(0x55000000);
+        c.drawRoundRect(new RectF(x + 3, y - hudH * 0.32f + 4, x + tile * 2.3f + 3, y + hudH * 0.32f + 4), 18, 18, p);
+        p.setColor(0xFF263238);
+        c.drawRoundRect(new RectF(x, y - hudH * 0.32f, x + tile * 2.3f, y + hudH * 0.32f), 18, 18, p);
+        p.setColor(0xFF37474F);
+        c.drawRoundRect(new RectF(x + 3, y - hudH * 0.32f + 3, x + tile * 2.3f - 3, y + hudH * 0.32f - 3), 16, 16, p);
+        // coin
+        p.setColor(color);
+        c.drawCircle(x + hudH * 0.32f, y, hudH * 0.28f, p);
+        p.setColor(Tower.darken(color, 0.7f));
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(3);
+        c.drawCircle(x + hudH * 0.32f, y, hudH * 0.28f, p);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xCCFFFFFF);
+        c.drawCircle(x + hudH * 0.32f - hudH * 0.1f, y - hudH * 0.12f, hudH * 0.08f, p);
         textP.setColor(Color.WHITE);
-        textP.setTextSize(h * 0.55f);
+        textP.setTextSize(hudH * 0.4f);
+        textP.setFakeBoldText(true);
+        c.drawText(label, x + hudH * 0.7f, y + hudH * 0.15f, textP);
+        textP.setFakeBoldText(false);
+    }
+
+    void drawHeartBubble(Canvas c, float x, float y, int hp) {
+        Paint p = paint;
+        p.setShader(null);
+        p.setColor(0xFF263238);
+        c.drawRoundRect(new RectF(x, y - hudH * 0.32f, x + tile * 2.3f, y + hudH * 0.32f), 18, 18, p);
+        p.setColor(0xFF37474F);
+        c.drawRoundRect(new RectF(x + 3, y - hudH * 0.32f + 3, x + tile * 2.3f - 3, y + hudH * 0.32f - 3), 16, 16, p);
+        // heart
+        p.setColor(0xFFE53935);
+        float hx = x + hudH * 0.32f, hy = y;
+        float hr = hudH * 0.2f;
+        c.drawCircle(hx - hr * 0.5f, hy - hr * 0.3f, hr * 0.55f, p);
+        c.drawCircle(hx + hr * 0.5f, hy - hr * 0.3f, hr * 0.55f, p);
+        Path heart = new Path();
+        heart.moveTo(hx - hr, hy - hr * 0.1f);
+        heart.lineTo(hx + hr, hy - hr * 0.1f);
+        heart.lineTo(hx, hy + hr * 0.9f);
+        heart.close();
+        c.drawPath(heart, p);
+        p.setColor(0xCCFFFFFF);
+        c.drawCircle(hx - hr * 0.5f, hy - hr * 0.4f, hr * 0.2f, p);
+        textP.setColor(Color.WHITE);
+        textP.setTextSize(hudH * 0.4f);
+        textP.setFakeBoldText(true);
+        c.drawText(String.valueOf(hp), x + hudH * 0.7f, y + hudH * 0.15f, textP);
+        textP.setFakeBoldText(false);
+    }
+
+    void drawPillButton(Canvas c, float x, float y, float w, float h, String label, int color) {
+        paint.setShader(null);
+        paint.setColor(0x66000000);
+        c.drawRoundRect(new RectF(x + 3, y + 5, x + w + 3, y + h + 5), h * 0.5f, h * 0.5f, paint);
+        paint.setColor(Tower.darken(color, 0.65f));
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), h * 0.5f, h * 0.5f, paint);
+        paint.setColor(color);
+        c.drawRoundRect(new RectF(x + 3, y + 3, x + w - 3, y + h - 3), h * 0.5f, h * 0.5f, paint);
+        paint.setColor(0x66FFFFFF);
+        c.drawRoundRect(new RectF(x + 6, y + 6, x + w - 6, y + h * 0.4f), h * 0.5f, h * 0.5f, paint);
+        textP.setColor(Color.WHITE);
+        textP.setTextSize(h * 0.5f);
+        textP.setFakeBoldText(true);
         float tw = textP.measureText(label);
-        c.drawText(label, x + w / 2 - tw / 2, y + h * 0.7f, textP);
-        textP.setTextSize(tile * 0.42f);
+        c.drawText(label, x + w / 2 - tw / 2, y + h * 0.68f, textP);
+        textP.setFakeBoldText(false);
+        textP.setTextSize(tile * 0.38f);
     }
 
     void drawTowerBar(Canvas c) {
-        float by = topPad + gameAreaH;
+        // panel
         paint.setShader(null);
-        LinearGradient lg = new LinearGradient(0, by, 0, screenH, 0xFF37474F, 0xFF263238, Shader.TileMode.CLAMP);
+        LinearGradient lg = new LinearGradient(panelX, 0, screenW, 0, 0xFF37474F, 0xFF263238, Shader.TileMode.CLAMP);
         paint.setShader(lg);
-        c.drawRect(0, by, screenW, screenH, paint);
+        c.drawRect(panelX, hudH, screenW, screenH, paint);
         paint.setShader(null);
+        paint.setColor(0xFF1A237E);
+        c.drawRect(panelX, hudH, panelX + 4, screenH, paint);
 
-        int cols = 4;
-        int rows = 2;
-        float pad = 6;
-        float cw = (screenW - pad * (cols + 1)) / cols;
-        float ch = (bottomBar - pad * (rows + 1)) / rows;
+        textP.setColor(0xFFFFEB3B);
+        textP.setTextSize(panelW * 0.08f);
+        textP.setFakeBoldText(true);
+        c.drawText("TOWERS", panelX + 16, hudH + panelW * 0.1f, textP);
+        textP.setFakeBoldText(false);
+        textP.setTextSize(panelW * 0.05f);
+        textP.setColor(0xFFB0BEC5);
+        c.drawText("Tap to buy & place", panelX + 16, hudH + panelW * 0.15f, textP);
+
+        // 2 cols x 4 rows
+        float cardY0 = hudH + panelW * 0.2f;
+        float pad = 10;
+        int cols = 2;
+        float cw = (panelW - pad * 3) / cols;
+        float availH = screenH - cardY0 - 10;
+        int rows = 4;
+        float ch = (availH - pad * (rows + 1)) / rows;
         int idx = 0;
         for (int rr = 0; rr < rows; rr++) {
             for (int cc = 0; cc < cols; cc++) {
-                float x = pad + cc * (cw + pad);
-                float y = by + pad + rr * (ch + pad);
-                drawTowerCard(c, x, y, cw, ch, idx);
+                int type = rr * cols + cc;
+                if (type >= Tower.TYPE_COUNT) continue;
+                float x = panelX + pad + cc * (cw + pad);
+                float y = cardY0 + pad + rr * (ch + pad);
+                drawTowerCard(c, x, y, cw, ch, type);
                 idx++;
             }
         }
+        textP.setTextSize(tile * 0.38f);
     }
 
     void drawTowerCard(Canvas c, float x, float y, float w, float h, int type) {
         boolean sel = placingTowerType == type;
         boolean affordable = cash >= Tower.BASE_COST[type];
         paint.setShader(null);
-        paint.setColor(0x44000000);
-        c.drawRoundRect(new RectF(x + 2, y + 3, x + w + 2, y + h + 3), 14, 14, paint);
-        paint.setColor(sel ? 0xFF1976D2 : (affordable ? 0xFF455A64 : 0xFF263238));
-        c.drawRoundRect(new RectF(x, y, x + w, y + h), 14, 14, paint);
-        paint.setColor(0x22FFFFFF);
-        c.drawRoundRect(new RectF(x + 2, y + 2, x + w - 2, y + h * 0.45f), 12, 12, paint);
-        Tower.drawIcon(c, paint, type, x + w / 2, y + h * 0.45f, h * 0.32f);
+        paint.setColor(0x55000000);
+        c.drawRoundRect(new RectF(x + 3, y + 4, x + w + 3, y + h + 4), 16, 16, paint);
+        int bgCol = sel ? 0xFF1976D2 : (affordable ? 0xFF455A64 : 0xFF2C3940);
+        paint.setColor(Tower.darken(bgCol, 0.7f));
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), 16, 16, paint);
+        paint.setColor(bgCol);
+        c.drawRoundRect(new RectF(x + 3, y + 3, x + w - 3, y + h - 3), 14, 14, paint);
+        paint.setColor(0x33FFFFFF);
+        c.drawRoundRect(new RectF(x + 6, y + 6, x + w - 6, y + h * 0.45f), 12, 12, paint);
+
+        // tower icon (use pre-rendered bitmap centered)
+        Bitmap bmp = towerBmp[type];
+        if (bmp != null) {
+            float iconSize = Math.min(w * 0.55f, h * 0.6f);
+            float bx = x + w / 2 - iconSize / 2;
+            float by = y + h * 0.1f;
+            RectF dst = new RectF(bx, by, bx + iconSize, by + iconSize);
+            c.drawBitmap(bmp, null, dst, paint);
+            // gun overlay (tiny)
+            Bitmap gun = towerGunBmp[type];
+            if (gun != null) c.drawBitmap(gun, null, dst, paint);
+        }
+
         textP.setColor(affordable ? Color.WHITE : 0xFF9E9E9E);
-        textP.setTextSize(h * 0.18f);
+        textP.setTextSize(h * 0.16f);
+        textP.setFakeBoldText(true);
         String n = Tower.NAME[type];
         float tw = textP.measureText(n);
-        c.drawText(n, x + w / 2 - tw / 2, y + h * 0.83f, textP);
+        c.drawText(n, x + w / 2 - tw / 2, y + h * 0.82f, textP);
         textP.setColor(affordable ? 0xFFFFEB3B : 0xFFE57373);
-        textP.setTextSize(h * 0.16f);
+        textP.setTextSize(h * 0.14f);
         String cost = "$" + Tower.BASE_COST[type];
         float tw2 = textP.measureText(cost);
-        c.drawText(cost, x + w / 2 - tw2 / 2, y + h * 0.98f, textP);
+        c.drawText(cost, x + w / 2 - tw2 / 2, y + h * 0.96f, textP);
+        textP.setFakeBoldText(false);
         textP.setColor(Color.WHITE);
-        textP.setTextSize(tile * 0.42f);
+        textP.setTextSize(tile * 0.38f);
     }
 
     void drawUpgradePanel(Canvas c) {
-        float by = topPad + gameAreaH;
         paint.setShader(null);
-        LinearGradient lg = new LinearGradient(0, by, 0, screenH, 0xFF263238, 0xFF1A237E, Shader.TileMode.CLAMP);
+        LinearGradient lg = new LinearGradient(panelX, 0, screenW, 0, 0xFF263238, 0xFF1A237E, Shader.TileMode.CLAMP);
         paint.setShader(lg);
-        c.drawRect(0, by, screenW, screenH, paint);
+        c.drawRect(panelX, hudH, screenW, screenH, paint);
         paint.setShader(null);
+        paint.setColor(0xFFFFEB3B);
+        c.drawRect(panelX, hudH, panelX + 4, screenH, paint);
 
-        textP.setColor(0xFFFFEB3B);
-        textP.setTextSize(tile * 0.5f);
-        c.drawText(Tower.NAME[selectedTower.type] + " (tier "
-                + selectedTower.tiers[0] + "/" + selectedTower.tiers[1] + ")",
-                16, by + tile * 0.5f, textP);
+        // Header: tower icon and name
+        float headerY = hudH + 12;
+        float iconSize = panelW * 0.25f;
+        Bitmap bmp = towerBmp[selectedTower.type];
+        if (bmp != null) {
+            RectF dst = new RectF(panelX + 14, headerY, panelX + 14 + iconSize, headerY + iconSize);
+            c.drawBitmap(bmp, null, dst, paint);
+            Bitmap gun = towerGunBmp[selectedTower.type];
+            if (gun != null) c.drawBitmap(gun, null, dst, paint);
+        }
+        textP.setColor(Color.WHITE);
+        textP.setTextSize(panelW * 0.07f);
+        textP.setFakeBoldText(true);
+        c.drawText(Tower.NAME[selectedTower.type], panelX + iconSize + 28, headerY + iconSize * 0.45f, textP);
+        textP.setFakeBoldText(false);
+        textP.setTextSize(panelW * 0.05f);
         textP.setColor(0xFFB0BEC5);
-        textP.setTextSize(tile * 0.3f);
-        c.drawText("DMG " + selectedTower.damage() + "  Range " + (int) selectedTower.range()
-                        + "  Rate " + String.format("%.1f", selectedTower.rate()),
-                16, by + tile * 0.85f, textP);
+        c.drawText("DMG " + selectedTower.damage()
+                        + " · R " + (int) selectedTower.range()
+                        + " · " + String.format("%.1f/s", selectedTower.rate()),
+                panelX + iconSize + 28, headerY + iconSize * 0.75f, textP);
 
-        // two upgrade paths
-        float panelTop = by + tile * 1.0f;
-        float panelH = bottomBar - tile * 1.2f;
-        float w = (screenW - 24 - 24 - 12) / 2f;
-        drawUpgradePath(c, 16, panelTop, w, panelH, 0, 0xFFFFEB3B);
-        drawUpgradePath(c, 16 + w + 12, panelTop, w, panelH, 1, 0xFF40C4FF);
+        // path A and B stacked
+        float pathTop = headerY + iconSize + 14;
+        float pathH = (screenH - pathTop - 80) / 2;
+        drawUpgradePathBig(c, panelX + 10, pathTop, panelW - 20, pathH, 0, 0xFFFFEB3B);
+        drawUpgradePathBig(c, panelX + 10, pathTop + pathH + 8, panelW - 20, pathH, 1, 0xFF40C4FF);
 
-        // sell button (top-right of panel)
-        float bw = tile * 1.2f;
+        // sell + deselect buttons
         int sellAmt = selectedTower.totalSpent * 7 / 10;
-        drawBtnLabel(c, screenW - bw - 10, by + 10, bw, tile * 0.55f, "Sell $" + sellAmt, 0xFFD84315);
+        float by = screenH - 70;
+        drawPillButton(c, panelX + 10, by, (panelW - 30) * 0.55f, 60, "Sell $" + sellAmt, 0xFFD84315);
+        drawPillButton(c, panelX + 20 + (panelW - 30) * 0.55f, by, (panelW - 30) * 0.45f, 60, "CLOSE", 0xFF455A64);
+        textP.setTextSize(tile * 0.38f);
     }
 
-    void drawUpgradePath(Canvas c, float x, float y, float w, float h, int path, int accent) {
+    void drawUpgradePathBig(Canvas c, float x, float y, float w, float h, int path, int accent) {
         paint.setShader(null);
+        paint.setColor(Tower.darken(0xFF37474F, 0.7f));
+        c.drawRoundRect(new RectF(x + 3, y + 4, x + w + 3, y + h + 4), 16, 16, paint);
         paint.setColor(0xFF37474F);
-        c.drawRoundRect(new RectF(x, y, x + w, y + h), 14, 14, paint);
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), 16, 16, paint);
+        // header strip
         paint.setColor(accent);
-        c.drawRoundRect(new RectF(x, y, x + w, y + tile * 0.3f), 14, 14, paint);
-        textP.setColor(0xFF000000);
-        textP.setTextSize(tile * 0.28f);
-        String t = path == 0 ? "Path A" : "Path B";
-        c.drawText(t, x + 10, y + tile * 0.23f, textP);
+        c.drawRoundRect(new RectF(x, y, x + w, y + h * 0.22f), 16, 16, paint);
+        paint.setColor(Tower.darken(accent, 0.7f));
+        c.drawRect(x, y + h * 0.18f, x + w, y + h * 0.22f, paint);
+
+        // header text
+        textP.setColor(0xFF263238);
+        textP.setTextSize(h * 0.16f);
+        textP.setFakeBoldText(true);
+        c.drawText("Path " + (path == 0 ? "A" : "B"), x + 12, y + h * 0.16f, textP);
+
+        // tier preview icons (3 small thumbnails)
+        for (int t = 0; t < 3; t++) {
+            float tx = x + w * 0.4f + t * w * 0.18f;
+            float ty = y + h * 0.5f;
+            float sz = h * 0.36f;
+            boolean owned = selectedTower.tiers[path] > t;
+            boolean next = selectedTower.tiers[path] == t;
+            paint.setColor(owned ? accent : (next ? 0x66FFFFFF : 0x33FFFFFF));
+            c.drawCircle(tx, ty, sz / 2 + 6, paint);
+            paint.setColor(0xFF263238);
+            c.drawCircle(tx, ty, sz / 2 + 2, paint);
+            // mini icon: redraw tower with offset for visual progression
+            paint.setColor(Tower.BODY_COLOR[selectedTower.type]);
+            c.drawCircle(tx, ty, sz * 0.4f, paint);
+            paint.setColor(Tower.darken(Tower.BODY_COLOR2[selectedTower.type], 1f));
+            c.drawCircle(tx, ty, sz * 0.4f - 3, paint);
+            // path-specific decoration on top
+            paint.setColor(accent);
+            for (int k = 0; k <= t; k++) {
+                c.drawCircle(tx + (k - t * 0.5f) * sz * 0.18f, ty - sz * 0.5f, sz * 0.08f, paint);
+            }
+            if (owned) {
+                paint.setColor(0xFF4CAF50);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(4);
+                c.drawCircle(tx, ty, sz / 2 + 8, paint);
+                paint.setStyle(Paint.Style.FILL);
+            }
+            if (next) {
+                paint.setColor(0xFFFFEB3B);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(3);
+                c.drawCircle(tx, ty, sz / 2 + 8, paint);
+                paint.setStyle(Paint.Style.FILL);
+            }
+        }
 
         UpgradeDef next = selectedTower.nextUpgrade(path);
-        textP.setColor(Color.WHITE);
-        textP.setTextSize(tile * 0.3f);
+        textP.setFakeBoldText(false);
         if (next == null) {
-            String done = "MAX TIER";
-            float ww = textP.measureText(done);
-            c.drawText(done, x + w / 2 - ww / 2, y + h / 2, textP);
+            textP.setColor(0xFF4CAF50);
+            textP.setTextSize(h * 0.16f);
+            String done = "✓ MAXED";
+            c.drawText(done, x + 12, y + h * 0.55f, textP);
         } else {
-            // show name, cost, big buy button
-            textP.setTextSize(tile * 0.34f);
-            c.drawText(next.name, x + 12, y + tile * 0.7f, textP);
-            textP.setTextSize(tile * 0.26f);
-            textP.setColor(0xFFB0BEC5);
-            String desc = upgradeDesc(next);
-            c.drawText(desc, x + 12, y + tile * 1.0f, textP);
-
-            float btY = y + h - tile * 0.65f;
-            boolean afford = cash >= next.cost;
-            paint.setColor(afford ? 0xFF388E3C : 0xFF616161);
-            c.drawRoundRect(new RectF(x + 8, btY, x + w - 8, btY + tile * 0.55f), 12, 12, paint);
             textP.setColor(Color.WHITE);
-            textP.setTextSize(tile * 0.3f);
-            String label = "Buy $" + next.cost;
-            float lw = textP.measureText(label);
-            c.drawText(label, x + w / 2 - lw / 2, btY + tile * 0.4f, textP);
-        }
+            textP.setTextSize(h * 0.16f);
+            textP.setFakeBoldText(true);
+            c.drawText(next.name, x + 12, y + h * 0.45f, textP);
+            textP.setFakeBoldText(false);
+            textP.setTextSize(h * 0.11f);
+            textP.setColor(0xFFB0BEC5);
+            c.drawText(upgradeDesc(next), x + 12, y + h * 0.62f, textP);
 
-        // show tier dots
-        for (int i = 0; i < 3; i++) {
-            float px = x + w - tile * 0.7f + i * tile * 0.22f;
-            float py = y + tile * 0.18f;
-            paint.setColor(selectedTower.tiers[path] > i ? accent : 0x55000000);
-            c.drawCircle(px, py, tile * 0.07f, paint);
+            // buy button
+            float btw = w * 0.36f;
+            float bth = h * 0.28f;
+            float btx = x + w - btw - 8;
+            float bty = y + h - bth - 8;
+            boolean afford = cash >= next.cost;
+            drawPillButton(c, btx, bty, btw, bth, "Buy $" + next.cost, afford ? 0xFF388E3C : 0xFF616161);
         }
         textP.setColor(Color.WHITE);
-        textP.setTextSize(tile * 0.42f);
+        textP.setTextSize(tile * 0.38f);
     }
 
     String upgradeDesc(UpgradeDef u) {
@@ -898,84 +1431,260 @@ public class Game {
         if (u.pierceAdd > 0) sb.append("+").append(u.pierceAdd).append("pierce ");
         if (u.rateMult > 1.01f) sb.append("+").append((int) ((u.rateMult - 1f) * 100)).append("% rate ");
         if (u.rangeMult > 1.01f) sb.append("+").append((int) ((u.rangeMult - 1f) * 100)).append("% range ");
-        if (u.rateMult < 0.99f) sb.append("slower ");
-        if (u.special == UpgradeDef.SP_LEAD_POP) sb.append("pops Lead ");
-        if (u.special == UpgradeDef.SP_TRIPLE_SHOT) sb.append("triple shot ");
-        if (u.special == UpgradeDef.SP_LASER) sb.append("laser ");
-        if (u.special == UpgradeDef.SP_PLASMA) sb.append("plasma ");
-        if (u.special == UpgradeDef.SP_FREEZE) sb.append("stronger freeze ");
-        if (u.special == UpgradeDef.SP_NINJA_CAMO) sb.append("anti-camo ");
-        if (u.special == UpgradeDef.SP_SLOW_DARTS) sb.append("slows ");
-        if (u.special == UpgradeDef.SP_BIGGER_BOMBS) sb.append("huge AoE ");
-        if (u.special == UpgradeDef.SP_HOMING) sb.append("homing ");
+        if (u.special == UpgradeDef.SP_LEAD_POP) sb.append("Lead-pop ");
+        if (u.special == UpgradeDef.SP_TRIPLE_SHOT) sb.append("Triple shot ");
+        if (u.special == UpgradeDef.SP_LASER) sb.append("Laser ");
+        if (u.special == UpgradeDef.SP_PLASMA) sb.append("Plasma ");
+        if (u.special == UpgradeDef.SP_FREEZE) sb.append("Stronger freeze ");
+        if (u.special == UpgradeDef.SP_NINJA_CAMO) sb.append("Anti-Lead ");
+        if (u.special == UpgradeDef.SP_SLOW_DARTS) sb.append("Slows ");
+        if (u.special == UpgradeDef.SP_BIGGER_BOMBS) sb.append("Huge AoE ");
+        if (u.special == UpgradeDef.SP_HOMING) sb.append("Homing ");
         if (sb.length() == 0) sb.append("upgrade");
         return sb.toString().trim();
     }
 
-    // ---------------- MENU ----------------
-    void drawMenu(Canvas c) {
-        // background gradient
-        LinearGradient lg = new LinearGradient(0, 0, 0, screenH, 0xFF1A237E, 0xFF000000, Shader.TileMode.CLAMP);
-        paint.setShader(lg);
+    // ===================== MAIN MENU =====================
+    void drawMainMenu(Canvas c) {
+        // Sky gradient background
+        paint.setShader(new LinearGradient(0, 0, 0, screenH, 0xFF40C4FF, 0xFF1565C0, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH, paint);
+        paint.setShader(null);
+        // Sand & water (BTD2-like beach)
+        paint.setColor(0xFFFFE082);
+        Path beach = new Path();
+        beach.moveTo(0, screenH * 0.65f);
+        beach.cubicTo(screenW * 0.3f, screenH * 0.55f, screenW * 0.7f, screenH * 0.75f, screenW, screenH * 0.62f);
+        beach.lineTo(screenW, screenH);
+        beach.lineTo(0, screenH);
+        beach.close();
+        c.drawPath(beach, paint);
+        paint.setColor(0xFFFFCA28);
+        c.drawPath(beach, paint);
+        // sun
+        paint.setColor(0xFFFFEB3B);
+        c.drawCircle(screenW * 0.82f, screenH * 0.18f, screenH * 0.06f, paint);
+        paint.setColor(0x55FFFFFF);
+        c.drawCircle(screenW * 0.82f, screenH * 0.18f, screenH * 0.09f, paint);
+        // clouds
+        drawCloud(c, screenW * 0.15f, screenH * 0.15f, screenH * 0.05f);
+        drawCloud(c, screenW * 0.6f, screenH * 0.1f, screenH * 0.06f);
+        drawCloud(c, screenW * 0.92f, screenH * 0.32f, screenH * 0.045f);
+        // floating bloons
+        java.util.Random rng = new java.util.Random(7);
+        for (int i = 0; i < 14; i++) {
+            int t = rng.nextInt(8);
+            float bx = rng.nextFloat() * screenW;
+            float by = rng.nextFloat() * screenH * 0.7f;
+            float br = screenH * (0.04f + rng.nextFloat() * 0.03f);
+            by += (float) Math.sin(menuAnim * 0.6f + i) * br * 0.3f;
+            if (bloonBmp[t] != null) {
+                RectF dst = new RectF(bx - br, by - br, bx + br, by + br * 1.2f);
+                c.drawBitmap(bloonBmp[t], null, dst, paint);
+            }
+        }
+        // big logo
+        drawLogo(c, screenW * 0.5f, screenH * 0.18f);
+
+        // central button stack
+        float btnW = Math.min(screenW * 0.42f, 700);
+        float btnH = screenH * 0.11f;
+        float gap = btnH * 0.18f;
+        float startY = screenH * 0.42f;
+        float cx = screenW * 0.5f;
+        String[] labels = {"QUICK PLAY", "WORLDS", "TOWERS", "HOW TO PLAY"};
+        int[] colors = {0xFF66BB6A, 0xFFFFA000, 0xFF42A5F5, 0xFFAB47BC};
+        int[] icons = {0, 1, 2, 3};
+        for (int i = 0; i < 4; i++) {
+            drawMenuButton(c, cx - btnW / 2, startY + i * (btnH + gap), btnW, btnH, labels[i], colors[i], icons[i]);
+        }
+
+        // side ornaments — monkey character & balloons
+        drawSideCharacter(c, screenW * 0.13f, screenH * 0.55f, screenH * 0.16f);
+        drawSideCharacter(c, screenW * 0.87f, screenH * 0.55f, screenH * 0.16f);
+
+        // top-right currency
+        drawCoinBubble(c, screenW - tile * 2.6f - 20, screenH * 0.06f, String.valueOf(totalCoins), 0xFFFFEB3B);
+        // top-left lives badge
+        drawHeartBubble(c, 20, screenH * 0.06f, lives > 0 ? lives : 120);
+        // footer
+        textP.setColor(0x88FFFFFF);
+        textP.setTextSize(tile * 0.28f);
+        String tag = "v1.2  ·  tap a menu option";
+        float tw = textP.measureText(tag);
+        c.drawText(tag, screenW / 2f - tw / 2, screenH - 20, textP);
+        textP.setTextSize(tile * 0.38f);
+    }
+
+    void drawCloud(Canvas c, float x, float y, float r) {
+        paint.setShader(null);
+        paint.setColor(0xCCFFFFFF);
+        c.drawCircle(x - r, y, r, paint);
+        c.drawCircle(x + r, y, r, paint);
+        c.drawCircle(x, y - r * 0.5f, r * 1.1f, paint);
+        c.drawCircle(x, y + r * 0.3f, r * 0.9f, paint);
+        c.drawCircle(x + r * 1.7f, y + r * 0.1f, r * 0.8f, paint);
+    }
+
+    void drawLogo(Canvas c, float cx, float cy) {
+        float w = Math.min(screenW * 0.6f, 800);
+        float h = screenH * 0.22f;
+        paint.setShader(null);
+        // background panel
+        paint.setColor(0x44000000);
+        c.drawRoundRect(new RectF(cx - w / 2 + 8, cy - h / 2 + 10, cx + w / 2 + 8, cy + h / 2 + 10), 36, 36, paint);
+        paint.setColor(0xFFFF6F00);
+        c.drawRoundRect(new RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2), 36, 36, paint);
+        paint.setColor(0xFFFFA726);
+        c.drawRoundRect(new RectF(cx - w / 2 + 6, cy - h / 2 + 6, cx + w / 2 - 6, cy + h / 2 - 6), 30, 30, paint);
+        paint.setColor(0x44FFFFFF);
+        c.drawRoundRect(new RectF(cx - w / 2 + 12, cy - h / 2 + 12, cx + w / 2 - 12, cy - h * 0.05f), 24, 24, paint);
+        textP.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        textP.setTextSize(h * 0.46f);
+        textP.setColor(0xFF3E2723);
+        String line1 = "BLOON";
+        String line2 = "BATTLE";
+        float w1 = textP.measureText(line1);
+        float w2 = textP.measureText(line2);
+        c.drawText(line1, cx - w1 / 2 + 3, cy - h * 0.02f + 3, textP);
+        c.drawText(line2, cx - w2 / 2 + 3, cy + h * 0.35f + 3, textP);
+        textP.setColor(0xFFFFEB3B);
+        c.drawText(line1, cx - w1 / 2, cy - h * 0.02f, textP);
+        textP.setColor(0xFFE53935);
+        c.drawText(line2, cx - w2 / 2, cy + h * 0.35f, textP);
+        textP.setTypeface(android.graphics.Typeface.DEFAULT);
+        textP.setTextSize(tile * 0.38f);
+    }
+
+    void drawMenuButton(Canvas c, float x, float y, float w, float h, String label, int color, int iconType) {
+        paint.setShader(null);
+        // press-shadow
+        paint.setColor(0x66000000);
+        c.drawRoundRect(new RectF(x + 4, y + 8, x + w + 4, y + h + 8), h * 0.5f, h * 0.5f, paint);
+        // outline
+        paint.setColor(Tower.darken(color, 0.55f));
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), h * 0.5f, h * 0.5f, paint);
+        paint.setColor(color);
+        c.drawRoundRect(new RectF(x + 5, y + 5, x + w - 5, y + h - 5), h * 0.5f, h * 0.5f, paint);
+        // glossy highlight
+        paint.setColor(0x55FFFFFF);
+        c.drawRoundRect(new RectF(x + 10, y + 8, x + w - 10, y + h * 0.42f), h * 0.5f, h * 0.5f, paint);
+
+        // icon on left (round badge with mini tower)
+        float icCx = x + h * 0.55f;
+        float icR = h * 0.35f;
+        paint.setColor(0xFFFFFFFF);
+        c.drawCircle(icCx, y + h / 2, icR + 6, paint);
+        paint.setColor(Tower.darken(color, 0.4f));
+        c.drawCircle(icCx, y + h / 2, icR, paint);
+        // mini icon
+        Bitmap bmp = null;
+        switch (iconType) {
+            case 0: bmp = towerBmp[T_DART]; break;       // quick play
+            case 1: bmp = towerBmp[T_NINJA]; break;      // worlds
+            case 2: bmp = towerBmp[T_WIZARD]; break;     // towers
+            case 3: bmp = towerBmp[T_SUPER]; break;      // how to play
+        }
+        if (bmp != null) {
+            RectF dst = new RectF(icCx - icR, y + h / 2 - icR, icCx + icR, y + h / 2 + icR);
+            c.drawBitmap(bmp, null, dst, paint);
+        }
+        // label
+        textP.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        textP.setColor(0xFF3E2723);
+        textP.setTextSize(h * 0.42f);
+        float lw = textP.measureText(label);
+        c.drawText(label, x + h + 30 + ((w - h - 30) / 2) - lw / 2 + 2, y + h * 0.65f + 2, textP);
+        textP.setColor(0xFFFFFFFF);
+        c.drawText(label, x + h + 30 + ((w - h - 30) / 2) - lw / 2, y + h * 0.65f, textP);
+        textP.setTypeface(android.graphics.Typeface.DEFAULT);
+        textP.setTextSize(tile * 0.38f);
+    }
+
+    void drawSideCharacter(Canvas c, float cx, float cy, float r) {
+        // monkey body
+        paint.setShader(null);
+        paint.setColor(0x55000000);
+        c.drawCircle(cx + 5, cy + 8, r * 1.1f, paint);
+        paint.setColor(0xFF8D6E63);
+        c.drawCircle(cx, cy, r, paint);
+        paint.setColor(0xFFA1887F);
+        c.drawCircle(cx - r * 0.3f, cy - r * 0.3f, r * 0.6f, paint);
+        paint.setColor(0xFFFFE0B2);
+        c.drawCircle(cx, cy + r * 0.05f, r * 0.6f, paint);
+        paint.setColor(0xFF6D4C41);
+        c.drawCircle(cx - r * 0.2f, cy - r * 0.1f, r * 0.08f, paint);
+        c.drawCircle(cx + r * 0.2f, cy - r * 0.1f, r * 0.08f, paint);
+        paint.setColor(0xFFFFAB91);
+        c.drawCircle(cx, cy + r * 0.18f, r * 0.07f, paint);
+        paint.setColor(0xFF6D4C41);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(4);
+        RectF mouth = new RectF(cx - r * 0.2f, cy + r * 0.1f, cx + r * 0.2f, cy + r * 0.35f);
+        c.drawArc(mouth, 20, 140, false, paint);
+        paint.setStyle(Paint.Style.FILL);
+        // a balloon they hold
+        float bx = cx + r * 0.9f, by = cy - r * 0.6f;
+        float br = r * 0.45f;
+        if (bloonBmp[B_BLUE] != null) {
+            RectF dst = new RectF(bx - br, by - br, bx + br, by + br * 1.2f);
+            c.drawBitmap(bloonBmp[B_BLUE], null, dst, paint);
+        }
+        paint.setColor(0xFFFFFFFF);
+        c.drawLine(bx, by + br, cx + r * 0.2f, cy + r * 0.2f, paint);
+    }
+
+    // ===================== MAPS MENU =====================
+    void drawMapsMenu(Canvas c) {
+        paint.setShader(new LinearGradient(0, 0, 0, screenH, 0xFF1A237E, 0xFF000000, Shader.TileMode.CLAMP));
         c.drawRect(0, 0, screenW, screenH, paint);
         paint.setShader(null);
 
-        // floating bloons decorations
-        java.util.Random rng = new java.util.Random(42);
-        for (int i = 0; i < 18; i++) {
-            float bx = rng.nextFloat() * screenW;
-            float by = rng.nextFloat() * screenH;
-            float br = 18 + rng.nextFloat() * 30;
-            int col = BLOON_COLOR[rng.nextInt(BLOON_COLOR.length)];
-            paint.setColor(0x33FFFFFF);
-            c.drawCircle(bx + 3, by + 4, br, paint);
-            RadialGradient rg = new RadialGradient(bx - br * 0.3f, by - br * 0.4f, br * 1.3f,
-                    Bloon.lighten(col, 0.4f), Bloon.darken(col, 0.5f), Shader.TileMode.CLAMP);
-            paint.setShader(rg);
-            c.drawCircle(bx, by, br, paint);
-            paint.setShader(null);
-            paint.setColor(0x88FFFFFF);
-            c.drawCircle(bx - br * 0.35f, by - br * 0.4f, br * 0.25f, paint);
-        }
+        // header bar
+        paint.setShader(new LinearGradient(0, 0, 0, screenH * 0.12f, 0xFF0D47A1, 0xFF1565C0, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH * 0.12f, paint);
+        paint.setShader(null);
 
-        // Title
         textP.setColor(0xFFFFEB3B);
-        textP.setTextSize(tile * 1.2f);
-        String title = "BLOON BATTLE";
-        float tw = textP.measureText(title);
-        textP.setColor(0xFF000000);
-        c.drawText(title, screenW / 2f - tw / 2 + 4, tile * 1.4f + 4, textP);
-        textP.setColor(0xFFFFEB3B);
-        c.drawText(title, screenW / 2f - tw / 2, tile * 1.4f, textP);
-        textP.setTextSize(tile * 0.42f);
-        textP.setColor(0xFFB3E5FC);
-        String sub = "Select a world and map";
-        tw = textP.measureText(sub);
-        c.drawText(sub, screenW / 2f - tw / 2, tile * 1.95f, textP);
+        textP.setTextSize(screenH * 0.06f);
+        textP.setFakeBoldText(true);
+        c.drawText("CHOOSE MAP", 24, screenH * 0.08f, textP);
+        textP.setFakeBoldText(false);
+        textP.setTextSize(tile * 0.38f);
+
+        drawPillButton(c, screenW - tile * 2 - 20, screenH * 0.02f, tile * 2, screenH * 0.075f, "BACK", 0xFF607D8B);
 
         // world tabs
-        float tabsY = tile * 2.3f;
-        float tabH = tile * 0.85f;
-        float tabW = (screenW - 40) / 4f;
+        float tabsY = screenH * 0.15f;
+        float tabH = screenH * 0.085f;
+        float tabW = (screenW - 60) / 4f;
         for (int i = 0; i < 4; i++) {
-            float x = 20 + i * tabW;
+            float x = 30 + i * tabW;
             boolean sel = selectedWorld == i;
-            paint.setColor(sel ? worldAccent(i) : 0xFF37474F);
-            c.drawRoundRect(new RectF(x + 4, tabsY, x + tabW - 4, tabsY + tabH), 16, 16, paint);
-            paint.setColor(0x33FFFFFF);
-            c.drawRoundRect(new RectF(x + 6, tabsY + 4, x + tabW - 6, tabsY + tabH * 0.5f), 12, 12, paint);
-            textP.setColor(sel ? 0xFFFFFFFF : 0xFFB0BEC5);
-            textP.setTextSize(tile * 0.4f);
+            int col = worldAccent(i);
+            paint.setColor(sel ? col : Tower.darken(col, 0.45f));
+            c.drawRoundRect(new RectF(x + 6, tabsY + 4, x + tabW - 6, tabsY + tabH + 4), 18, 18, paint);
+            paint.setColor(sel ? Tower.darken(col, 0.7f) : Tower.darken(col, 0.35f));
+            c.drawRoundRect(new RectF(x + 6, tabsY, x + tabW - 6, tabsY + tabH), 18, 18, paint);
+            paint.setColor(sel ? col : Tower.darken(col, 0.6f));
+            c.drawRoundRect(new RectF(x + 10, tabsY + 3, x + tabW - 10, tabsY + tabH - 3), 14, 14, paint);
+            paint.setColor(0x44FFFFFF);
+            c.drawRoundRect(new RectF(x + 14, tabsY + 6, x + tabW - 14, tabsY + tabH * 0.5f), 12, 12, paint);
+            textP.setColor(0xFFFFFFFF);
+            textP.setTextSize(tabH * 0.42f);
+            textP.setFakeBoldText(true);
             String n = MapDef.WORLD_NAME[i];
             float nw = textP.measureText(n);
             c.drawText(n, x + tabW / 2 - nw / 2, tabsY + tabH * 0.65f, textP);
+            textP.setFakeBoldText(false);
         }
+        textP.setTextSize(tile * 0.38f);
 
-        // map cards
-        float cardsTop = tabsY + tabH + tile * 0.4f;
-        float pad = 20;
+        // grid of map cards
+        float cardsTop = tabsY + tabH + 20;
+        float pad = 22;
         float cardW = (screenW - pad * 3) / 2f;
-        float cardH = tile * 3.2f;
+        float cardH = (screenH - cardsTop - pad - screenH * 0.05f) / 2;
         int idx = 0;
         for (int m = 0; m < MapDef.ALL.length; m++) {
             MapDef map = MapDef.ALL[m];
@@ -992,64 +1701,88 @@ public class Game {
             textP.setTextSize(tile * 0.4f);
             String s = "No maps in this world yet";
             float ww = textP.measureText(s);
-            c.drawText(s, screenW / 2f - ww / 2, cardsTop + tile * 2, textP);
+            c.drawText(s, screenW / 2f - ww / 2, cardsTop + screenH * 0.2f, textP);
         }
-
-        // footer
-        textP.setColor(0xFF607D8B);
-        textP.setTextSize(tile * 0.28f);
-        String f = "v1.1  •  tap a map to play";
-        float fw = textP.measureText(f);
-        c.drawText(f, screenW / 2f - fw / 2, screenH - 20, textP);
-        textP.setTextSize(tile * 0.42f);
     }
 
     void drawMapCard(Canvas c, float x, float y, float w, float h, MapDef m) {
-        paint.setShader(null);
-        paint.setColor(0x66000000);
-        c.drawRoundRect(new RectF(x + 4, y + 5, x + w + 4, y + h + 5), 18, 18, paint);
         int top = worldAccent(m.world);
-        int bot = darken(top, 0.5f);
-        LinearGradient lg = new LinearGradient(0, y, 0, y + h, top, bot, Shader.TileMode.CLAMP);
-        paint.setShader(lg);
-        c.drawRoundRect(new RectF(x, y, x + w, y + h), 18, 18, paint);
+        int bot = Tower.darken(top, 0.45f);
         paint.setShader(null);
+        paint.setColor(0x99000000);
+        c.drawRoundRect(new RectF(x + 6, y + 8, x + w + 6, y + h + 8), 22, 22, paint);
+        paint.setColor(Tower.darken(top, 0.3f));
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), 22, 22, paint);
+        paint.setShader(new LinearGradient(x, y, x, y + h, top, bot, Shader.TileMode.CLAMP));
+        c.drawRoundRect(new RectF(x + 6, y + 6, x + w - 6, y + h - 6), 18, 18, paint);
+        paint.setShader(null);
+        paint.setColor(0x33FFFFFF);
+        c.drawRoundRect(new RectF(x + 10, y + 10, x + w - 10, y + h * 0.45f), 16, 16, paint);
 
-        // preview path
+        // preview area
+        float prevX = x + 16;
+        float prevY = y + h * 0.20f;
+        float prevW = w - 32;
+        float prevH = h * 0.55f;
+        paint.setColor(0xFF1B5E20);
+        if (m.world == MapDef.W_DESERT) paint.setColor(0xFFFF8F00);
+        else if (m.world == MapDef.W_SNOW) paint.setColor(0xFFB3E5FC);
+        else if (m.world == MapDef.W_LAVA) paint.setColor(0xFF263238);
+        c.drawRoundRect(new RectF(prevX, prevY, prevX + prevW, prevY + prevH), 14, 14, paint);
+
+        // preview path with proper styling
         Path p = new Path();
-        float px0 = 0, py0 = 0;
         boolean first = true;
         for (float[] wp : m.waypoints) {
-            float pxw = x + 16 + (wp[0] / COLS) * (w - 32);
-            float pyw = y + tile * 0.7f + (wp[1] / MapDef.MAP_ROWS) * (h - tile * 1.4f);
+            float pxw = prevX + ((wp[0] + 0.5f) / MapDef.COLS) * prevW;
+            float pyw = prevY + ((wp[1] + 0.5f) / MapDef.ROWS) * prevH;
             if (first) { p.moveTo(pxw, pyw); first = false; }
             else p.lineTo(pxw, pyw);
-            px0 = pxw; py0 = pyw;
         }
-        paint.setColor(0xFF3E2723);
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(tile * 0.18f);
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeJoin(Paint.Join.ROUND);
+        paint.setColor(0xFF3E2723);
+        paint.setStrokeWidth(prevH * 0.12f);
         c.drawPath(p, paint);
         paint.setColor(0xFFBCAAA4);
-        paint.setStrokeWidth(tile * 0.10f);
+        paint.setStrokeWidth(prevH * 0.085f);
         c.drawPath(p, paint);
         paint.setStyle(Paint.Style.FILL);
 
-        // name + difficulty
-        textP.setColor(Color.WHITE);
-        textP.setTextSize(tile * 0.42f);
-        c.drawText(m.name, x + 14, y + tile * 0.5f, textP);
+        // name
+        textP.setColor(0xFFFFFFFF);
+        textP.setTextSize(h * 0.13f);
+        textP.setFakeBoldText(true);
+        c.drawText(m.name, x + 18, y + h * 0.15f, textP);
+        textP.setFakeBoldText(false);
         // stars
         for (int i = 0; i < 5; i++) {
-            paint.setColor(i < m.difficulty ? 0xFFFFEB3B : 0x44FFFFFF);
-            c.drawCircle(x + w - 18 - (4 - i) * 22, y + tile * 0.35f, 9, paint);
+            paint.setColor(i < m.difficulty ? 0xFFFFEB3B : 0x55000000);
+            float sx = x + w - 24 - (4 - i) * (h * 0.07f);
+            float sy = y + h * 0.1f;
+            drawStar(c, sx, sy, h * 0.04f, paint.getColor());
         }
-        textP.setColor(0xFFB3E5FC);
-        textP.setTextSize(tile * 0.3f);
-        c.drawText("PLAY ▶", x + w - tile * 1.3f, y + h - tile * 0.2f, textP);
-        textP.setTextSize(tile * 0.42f);
+        // play badge
+        float badgeW = w * 0.32f;
+        float badgeH = h * 0.18f;
+        drawPillButton(c, x + w - badgeW - 14, y + h - badgeH - 14, badgeW, badgeH, "PLAY ▶", 0xFFE53935);
+
+        textP.setTextSize(tile * 0.38f);
+    }
+
+    void drawStar(Canvas c, float cx, float cy, float r, int col) {
+        paint.setColor(col);
+        Path star = new Path();
+        for (int i = 0; i < 10; i++) {
+            double a = -Math.PI / 2 + i * Math.PI / 5;
+            double rr = (i % 2 == 0) ? r : r * 0.45;
+            float px = cx + (float) (Math.cos(a) * rr);
+            float py = cy + (float) (Math.sin(a) * rr);
+            if (i == 0) star.moveTo(px, py); else star.lineTo(px, py);
+        }
+        star.close();
+        c.drawPath(star, paint);
     }
 
     int worldAccent(int w) {
@@ -1060,43 +1793,232 @@ public class Game {
             default: return 0xFF66BB6A;
         }
     }
-    static int darken(int c, float t) {
-        int a = (c >> 24) & 0xFF;
-        int r = (int) (((c >> 16) & 0xFF) * t);
-        int g = (int) (((c >> 8) & 0xFF) * t);
-        int b = (int) ((c & 0xFF) * t);
-        return (a << 24) | (r << 16) | (g << 8) | b;
+
+    // ===================== TOWERS MENU =====================
+    void drawTowersMenu(Canvas c) {
+        paint.setShader(new LinearGradient(0, 0, 0, screenH, 0xFF1A237E, 0xFF000000, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH, paint);
+        paint.setShader(null);
+
+        paint.setShader(new LinearGradient(0, 0, 0, screenH * 0.12f, 0xFF0D47A1, 0xFF1565C0, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH * 0.12f, paint);
+        paint.setShader(null);
+
+        textP.setColor(0xFFFFEB3B);
+        textP.setTextSize(screenH * 0.06f);
+        textP.setFakeBoldText(true);
+        c.drawText("TOWERS & UPGRADES", 24, screenH * 0.08f, textP);
+        textP.setFakeBoldText(false);
+        textP.setTextSize(tile * 0.38f);
+
+        drawPillButton(c, screenW - tile * 2 - 20, screenH * 0.02f, tile * 2, screenH * 0.075f, "BACK", 0xFF607D8B);
+
+        // 8 cards (4 cols × 2 rows)
+        float top = screenH * 0.14f;
+        float pad = 14;
+        int cols = 4, rows = 2;
+        float cw = (screenW - pad * (cols + 1)) / cols;
+        float ch = (screenH - top - pad * (rows + 1)) / rows;
+        for (int i = 0; i < Tower.TYPE_COUNT; i++) {
+            int r = i / cols;
+            int co = i % cols;
+            float x = pad + co * (cw + pad);
+            float y = top + pad + r * (ch + pad);
+            drawTowerRoster(c, x, y, cw, ch, i);
+        }
     }
 
-    // ---------------- INPUT ----------------
+    void drawTowerRoster(Canvas c, float x, float y, float w, float h, int type) {
+        paint.setShader(null);
+        paint.setColor(0xFF263238);
+        c.drawRoundRect(new RectF(x + 4, y + 6, x + w + 4, y + h + 6), 18, 18, paint);
+        paint.setColor(0xFF37474F);
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), 18, 18, paint);
+        paint.setColor(0xFF455A64);
+        c.drawRoundRect(new RectF(x + 4, y + 4, x + w - 4, y + h - 4), 14, 14, paint);
+        // tower icon
+        float iconY = y + 12;
+        float iconSize = Math.min(w * 0.45f, h * 0.32f);
+        if (towerBmp[type] != null) {
+            RectF dst = new RectF(x + w / 2 - iconSize / 2, iconY, x + w / 2 + iconSize / 2, iconY + iconSize);
+            c.drawBitmap(towerBmp[type], null, dst, paint);
+            if (towerGunBmp[type] != null) c.drawBitmap(towerGunBmp[type], null, dst, paint);
+        }
+        textP.setColor(Color.WHITE);
+        textP.setTextSize(h * 0.10f);
+        textP.setFakeBoldText(true);
+        String n = Tower.NAME[type];
+        float tw = textP.measureText(n);
+        c.drawText(n, x + w / 2 - tw / 2, iconY + iconSize + h * 0.1f, textP);
+        textP.setFakeBoldText(false);
+        textP.setTextSize(h * 0.075f);
+        textP.setColor(0xFFFFEB3B);
+        String cost = "$" + Tower.BASE_COST[type];
+        float cw2 = textP.measureText(cost);
+        c.drawText(cost, x + w / 2 - cw2 / 2, iconY + iconSize + h * 0.18f, textP);
+
+        // 2 paths summary, each 3 tier name
+        textP.setTextSize(h * 0.06f);
+        textP.setColor(0xFFFFEB3B);
+        c.drawText("Path A:", x + 8, y + h * 0.6f, textP);
+        textP.setColor(0xFF40C4FF);
+        c.drawText("Path B:", x + 8, y + h * 0.78f, textP);
+        textP.setColor(0xFFE0E0E0);
+        for (int p = 0; p < 2; p++) {
+            for (int t = 0; t < 3; t++) {
+                UpgradeDef u = UpgradeDef.TREE[type][p][t];
+                if (u == null) continue;
+                String s = "• " + u.name;
+                float sy = y + h * (p == 0 ? 0.65f : 0.83f) + t * h * 0.045f;
+                if (t > 0) sy = y + h * (p == 0 ? 0.6f : 0.78f) + (t + 1) * h * 0.06f;
+                c.drawText(s, x + 12 + (t * (w / 3 - 8)) % w, y + h * (p == 0 ? 0.65f : 0.83f) + (t * 0) * h * 0.05f, textP);
+            }
+        }
+        // simpler: just three small badges per path
+        // Path A row
+        float pyA = y + h * 0.68f;
+        for (int t = 0; t < 3; t++) {
+            float bx = x + 10 + t * (w / 3.3f);
+            paint.setColor(0xFFFFEB3B);
+            c.drawRoundRect(new RectF(bx, pyA, bx + w / 3.6f, pyA + h * 0.07f), 6, 6, paint);
+            textP.setColor(0xFF263238);
+            textP.setTextSize(h * 0.05f);
+            UpgradeDef u = UpgradeDef.TREE[type][0][t];
+            String label = u != null ? u.name : "-";
+            float lw = textP.measureText(label);
+            float pw = w / 3.6f;
+            if (lw > pw - 6) {
+                label = label.substring(0, Math.min(label.length(), Math.max(3, (int)((pw - 6) / (h * 0.03f)))));
+            }
+            c.drawText(label, bx + 4, pyA + h * 0.055f, textP);
+        }
+        float pyB = y + h * 0.86f;
+        for (int t = 0; t < 3; t++) {
+            float bx = x + 10 + t * (w / 3.3f);
+            paint.setColor(0xFF40C4FF);
+            c.drawRoundRect(new RectF(bx, pyB, bx + w / 3.6f, pyB + h * 0.07f), 6, 6, paint);
+            textP.setColor(0xFF263238);
+            textP.setTextSize(h * 0.05f);
+            UpgradeDef u = UpgradeDef.TREE[type][1][t];
+            String label = u != null ? u.name : "-";
+            float pw = w / 3.6f;
+            float lw = textP.measureText(label);
+            if (lw > pw - 6) {
+                label = label.substring(0, Math.min(label.length(), Math.max(3, (int)((pw - 6) / (h * 0.03f)))));
+            }
+            c.drawText(label, bx + 4, pyB + h * 0.055f, textP);
+        }
+        textP.setColor(Color.WHITE);
+        textP.setTextSize(tile * 0.38f);
+    }
+
+    // ===================== HOW TO MENU =====================
+    void drawHowToMenu(Canvas c) {
+        paint.setShader(new LinearGradient(0, 0, 0, screenH, 0xFF1A237E, 0xFF000000, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH, paint);
+        paint.setShader(null);
+
+        paint.setShader(new LinearGradient(0, 0, 0, screenH * 0.12f, 0xFF0D47A1, 0xFF1565C0, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH * 0.12f, paint);
+        paint.setShader(null);
+
+        textP.setColor(0xFFFFEB3B);
+        textP.setTextSize(screenH * 0.06f);
+        textP.setFakeBoldText(true);
+        c.drawText("HOW TO PLAY", 24, screenH * 0.08f, textP);
+        textP.setFakeBoldText(false);
+        drawPillButton(c, screenW - tile * 2 - 20, screenH * 0.02f, tile * 2, screenH * 0.075f, "BACK", 0xFF607D8B);
+
+        textP.setColor(0xFFE0F2F1);
+        textP.setTextSize(screenH * 0.04f);
+        String[] lines = {
+                "1. Pick a world and a map from the menu.",
+                "2. Tap a tower in the right panel to buy it.",
+                "3. Tap an empty grass tile to place the tower.",
+                "4. Tap GO! at the top to spawn the wave.",
+                "5. Tap an existing tower to upgrade or sell it.",
+                "6. Each tower has TWO upgrade paths, 3 tiers each.",
+                "7. Survive 20 waves including the MOAB boss to win!",
+                "",
+                "Tips:",
+                "• Ninja Monkeys can pop Lead with their special upgrade.",
+                "• Bomb Towers cannot pop Black bloons unless you go path A tier 3.",
+                "• Ice Tower freezes everything in radius — great choke point.",
+                "• Super Monkey and Wizard are expensive but devastating.",
+        };
+        float yy = screenH * 0.18f;
+        for (String s : lines) {
+            c.drawText(s, 40, yy, textP);
+            yy += screenH * 0.055f;
+        }
+        textP.setTextSize(tile * 0.38f);
+    }
+
+    // ===================== INPUT =====================
     public void onTouch(MotionEvent e) {
         lastTouchX = e.getX();
         lastTouchY = e.getY();
         if (e.getAction() != MotionEvent.ACTION_DOWN) return;
-
-        if (state == S_MENU) { onTouchMenu(); return; }
-        onTouchGame();
+        try {
+            switch (state) {
+                case S_MAIN:    onTouchMain();    break;
+                case S_MAPS:    onTouchMaps();    break;
+                case S_TOWERS:  onTouchTowers();  break;
+                case S_HOWTO:   onTouchHowTo();   break;
+                case S_PLAYING: onTouchGame();    break;
+            }
+        } catch (Throwable t) {
+            popupMessage = "INPUT ERR: " + t.getClass().getSimpleName();
+            popupTimer = 3f;
+        }
     }
 
-    void onTouchMenu() {
-        // world tabs
-        float tabsY = tile * 2.3f;
-        float tabH = tile * 0.85f;
-        float tabW = (screenW - 40) / 4f;
+    void onTouchMain() {
+        float btnW = Math.min(screenW * 0.42f, 700);
+        float btnH = screenH * 0.11f;
+        float gap = btnH * 0.18f;
+        float startY = screenH * 0.42f;
+        float cx = screenW * 0.5f;
+        for (int i = 0; i < 4; i++) {
+            float y = startY + i * (btnH + gap);
+            if (lastTouchX > cx - btnW / 2 && lastTouchX < cx + btnW / 2
+                    && lastTouchY > y && lastTouchY < y + btnH) {
+                if (i == 0) {
+                    // Quick play first map
+                    loadMap(MapDef.ALL[0]);
+                } else if (i == 1) {
+                    state = S_MAPS;
+                } else if (i == 2) {
+                    state = S_TOWERS;
+                } else if (i == 3) {
+                    state = S_HOWTO;
+                }
+                return;
+            }
+        }
+    }
+
+    void onTouchMaps() {
+        // back button
+        if (lastTouchX > screenW - tile * 2 - 20 && lastTouchY < screenH * 0.12f) {
+            state = S_MAIN; return;
+        }
+        float tabsY = screenH * 0.15f;
+        float tabH = screenH * 0.085f;
+        float tabW = (screenW - 60) / 4f;
         if (lastTouchY > tabsY && lastTouchY < tabsY + tabH) {
             for (int i = 0; i < 4; i++) {
-                float x = 20 + i * tabW;
+                float x = 30 + i * tabW;
                 if (lastTouchX > x && lastTouchX < x + tabW) {
                     selectedWorld = i;
                     return;
                 }
             }
         }
-        // map cards
-        float cardsTop = tabsY + tabH + tile * 0.4f;
-        float pad = 20;
+        float cardsTop = tabsY + tabH + 20;
+        float pad = 22;
         float cardW = (screenW - pad * 3) / 2f;
-        float cardH = tile * 3.2f;
+        float cardH = (screenH - cardsTop - pad - screenH * 0.05f) / 2;
         int idx = 0;
         for (int m = 0; m < MapDef.ALL.length; m++) {
             MapDef map = MapDef.ALL[m];
@@ -1114,42 +2036,52 @@ public class Game {
         }
     }
 
+    void onTouchTowers() {
+        if (lastTouchX > screenW - tile * 2 - 20 && lastTouchY < screenH * 0.12f) {
+            state = S_MAIN; return;
+        }
+    }
+
+    void onTouchHowTo() {
+        if (lastTouchX > screenW - tile * 2 - 20 && lastTouchY < screenH * 0.12f) {
+            state = S_MAIN; return;
+        }
+    }
+
     void onTouchGame() {
         if (gameOver) {
             float by = screenH / 2f + tile * 0.8f;
             float h = tile * 0.9f;
             if (lastTouchY > by && lastTouchY < by + h) {
-                if (lastTouchX > screenW / 2f - tile * 2.5f && lastTouchX < screenW / 2f - tile * 0.3f) {
+                if (lastTouchX > screenW / 2f - tile * 2.7f && lastTouchX < screenW / 2f - tile * 0.3f) {
                     loadMap(currentMap);
                     return;
-                } else if (lastTouchX > screenW / 2f + tile * 0.3f && lastTouchX < screenW / 2f + tile * 2.5f) {
-                    state = S_MENU;
+                } else if (lastTouchX > screenW / 2f + tile * 0.3f && lastTouchX < screenW / 2f + tile * 2.7f) {
+                    state = S_MAIN;
                     return;
                 }
             }
             return;
         }
 
-        // HUD top row
-        if (lastTouchY < topPad) {
-            float btnY = 10, btnH = tile * 0.5f;
-            if (lastTouchY >= btnY && lastTouchY <= btnY + btnH) {
-                float bw = tile * 0.95f;
-                float right = screenW - bw - 10;
-                if (lastTouchX >= right) {
+        // HUD top buttons
+        if (lastTouchY < hudH) {
+            float bw = tile * 1.15f;
+            float bh = hudH * 0.6f;
+            float by = hudH * 0.2f;
+            if (lastTouchY >= by && lastTouchY <= by + bh) {
+                float bx = screenW - bw - 10;
+                if (lastTouchX > bx) {
                     speedMult = speedMult == 1f ? 2f : (speedMult == 2f ? 3f : 1f);
                     return;
                 }
-                right -= bw + (tile * 1.05f - bw);
-                if (lastTouchX >= right && lastTouchX < right + bw) { paused = !paused; return; }
-                right -= tile * 1.05f;
-                if (lastTouchX >= right && lastTouchX < right + bw) {
-                    if (!waveActive) startWave();
-                    return;
-                }
-                right -= tile * 1.05f;
-                if (lastTouchX >= right && lastTouchX < right + bw) {
-                    state = S_MENU;
+                bx -= bw + 10;
+                if (lastTouchX > bx && lastTouchX < bx + bw) { paused = !paused; return; }
+                bx -= bw + 10;
+                if (lastTouchX > bx && lastTouchX < bx + bw) { if (!waveActive) startWave(); return; }
+                bx -= bw + 10;
+                if (lastTouchX > bx && lastTouchX < bx + bw) {
+                    state = S_MAIN;
                     selectedTower = null;
                     placingTowerType = -1;
                     return;
@@ -1158,50 +2090,64 @@ public class Game {
             return;
         }
 
-        // Bottom UI
-        float by = topPad + gameAreaH;
-        if (lastTouchY > by) {
+        // Right panel
+        if (lastTouchX > panelX) {
             if (selectedTower != null) {
-                // sell button
-                float bw = tile * 1.2f;
-                if (lastTouchX > screenW - bw - 10 && lastTouchY > by + 10 && lastTouchY < by + 10 + tile * 0.55f) {
-                    sellSelected();
-                    return;
+                // sell button or close
+                float by = screenH - 70;
+                float wA = (panelW - 30) * 0.55f;
+                if (lastTouchY > by && lastTouchY < by + 60) {
+                    if (lastTouchX > panelX + 10 && lastTouchX < panelX + 10 + wA) {
+                        sellSelected();
+                        return;
+                    }
+                    if (lastTouchX > panelX + 20 + wA) {
+                        selectedTower = null;
+                        return;
+                    }
                 }
-                // upgrade paths
-                float panelTop = by + tile * 1.0f;
-                float panelH = bottomBar - tile * 1.2f;
-                float w = (screenW - 24 - 24 - 12) / 2f;
+                // Buy buttons in each path panel
+                float headerY = hudH + 12;
+                float iconSize = panelW * 0.25f;
+                float pathTop = headerY + iconSize + 14;
+                float pathH = (screenH - pathTop - 80) / 2;
                 for (int p2 = 0; p2 < 2; p2++) {
-                    float x = 16 + p2 * (w + 12);
-                    float btY = panelTop + panelH - tile * 0.65f;
-                    if (lastTouchX > x + 8 && lastTouchX < x + w - 8
-                            && lastTouchY > btY && lastTouchY < btY + tile * 0.55f) {
-                        UpgradeDef u = selectedTower.nextUpgrade(p2);
-                        if (u != null && cash >= u.cost) {
+                    float py = pathTop + p2 * (pathH + 8);
+                    UpgradeDef u = selectedTower.nextUpgrade(p2);
+                    if (u == null) continue;
+                    float btw = (panelW - 20) * 0.36f;
+                    float bth = pathH * 0.28f;
+                    float btx = (panelX + 10) + (panelW - 20) - btw - 8;
+                    float bty = py + pathH - bth - 8;
+                    if (lastTouchX > btx && lastTouchX < btx + btw
+                            && lastTouchY > bty && lastTouchY < bty + bth) {
+                        if (cash >= u.cost) {
                             cash -= u.cost;
                             selectedTower.totalSpent += u.cost;
                             selectedTower.tiers[p2]++;
+                        } else {
+                            flash("Need $" + u.cost);
                         }
                         return;
                     }
                 }
-                // tap outside to deselect
-                if (lastTouchY > panelTop + panelH) selectedTower = null;
                 return;
             }
 
-            // tower bar tap
-            int colsN = 4, rowsN = 2;
-            float pad = 6;
-            float cw = (screenW - pad * (colsN + 1)) / colsN;
-            float ch = (bottomBar - pad * (rowsN + 1)) / rowsN;
-            for (int rr = 0; rr < rowsN; rr++) {
-                for (int cc = 0; cc < colsN; cc++) {
-                    int type = rr * colsN + cc;
+            // tower bar
+            float cardY0 = hudH + panelW * 0.2f;
+            float pad = 10;
+            int cols = 2;
+            float cw = (panelW - pad * 3) / cols;
+            float availH = screenH - cardY0 - 10;
+            int rows = 4;
+            float ch = (availH - pad * (rows + 1)) / rows;
+            for (int rr = 0; rr < rows; rr++) {
+                for (int cc = 0; cc < cols; cc++) {
+                    int type = rr * cols + cc;
                     if (type >= Tower.TYPE_COUNT) continue;
-                    float x = pad + cc * (cw + pad);
-                    float y = by + pad + rr * (ch + pad);
+                    float x = panelX + pad + cc * (cw + pad);
+                    float y = cardY0 + pad + rr * (ch + pad);
                     if (lastTouchX > x && lastTouchX < x + cw
                             && lastTouchY > y && lastTouchY < y + ch) {
                         if (cash >= Tower.BASE_COST[type]) {
@@ -1220,7 +2166,7 @@ public class Game {
         // Play area
         if (placingTowerType >= 0) {
             int cx = (int) (lastTouchX / tile);
-            int cy = (int) ((lastTouchY - topPad) / tileH());
+            int cy = (int) ((lastTouchY - hudH) / tile);
             if (inGrid(cx, cy) && canPlace(cx, cy)) {
                 Tower t = new Tower(placingTowerType, gridCenterX(cx), gridCenterY(cy), cx, cy);
                 t.totalSpent = Tower.BASE_COST[placingTowerType];
@@ -1248,9 +2194,8 @@ public class Game {
     void sellSelected() {
         if (selectedTower == null) return;
         cash += selectedTower.totalSpent * 7 / 10;
-        int cx = selectedTower.gridX, cy = selectedTower.gridY;
         towers.remove(selectedTower);
-        blocked = new boolean[COLS][MapDef.MAP_ROWS];
+        blocked = new boolean[COLS][ROWS];
         markPathBlocked();
         for (Tower t : towers) blocked[t.gridX][t.gridY] = true;
         selectedTower = null;
