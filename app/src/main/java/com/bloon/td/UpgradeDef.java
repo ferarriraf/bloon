@@ -109,5 +109,41 @@ public class UpgradeDef {
         TREE[Game.T_WIZARD][1][0] = new UpgradeDef("Homing Bolts", 240, 1f,   1f,    0, 1, SP_HOMING, 1f);
         TREE[Game.T_WIZARD][1][1] = new UpgradeDef("Lightning",    480, 1.10f,1.10f, 1, 2, SP_HOMING, 1f);
         TREE[Game.T_WIZARD][1][2] = new UpgradeDef("Tempest Tornado",880,1.20f,1.20f,2, 4, SP_HOMING, 1f);
+
+        // ------- Glue Gunner (T_GLUE) -------
+        TREE[Game.T_GLUE][0][0] = new UpgradeDef("Stickier Glue",  200, 1.0f, 1.0f,  0, 0, SP_SLOW_DARTS, 1f);
+        TREE[Game.T_GLUE][0][1] = new UpgradeDef("Glue Soak",      360, 1.10f,1.05f, 1, 0, SP_SLOW_DARTS, 1f);
+        TREE[Game.T_GLUE][0][2] = new UpgradeDef("Corrosive Glue", 720, 1.10f,1.05f, 2, 1, SP_SLOW_DARTS, 1f);
+
+        TREE[Game.T_GLUE][1][0] = new UpgradeDef("Larger Range",   180, 1.0f, 1.25f, 0, 1, SP_NONE, 1f);
+        TREE[Game.T_GLUE][1][1] = new UpgradeDef("Glue Splatter",  340, 1.0f, 1.15f, 0, 3, SP_NONE, 1f);
+        TREE[Game.T_GLUE][1][2] = new UpgradeDef("Glue Storm",     680, 1.20f,1.20f, 1, 4, SP_LEAD_POP, 1f);
+
+        // ------- Boomerang (T_BOOM) -------
+        TREE[Game.T_BOOM][0][0] = new UpgradeDef("Faster Throws",  220, 1.30f,1.0f,  0, 1, SP_NONE, 1f);
+        TREE[Game.T_BOOM][0][1] = new UpgradeDef("Glaives",        420, 1.0f, 1.05f, 1, 2, SP_LEAD_POP, 1f);
+        TREE[Game.T_BOOM][0][2] = new UpgradeDef("Glaive Lord",    820, 1.20f,1.10f, 2, 4, SP_LEAD_POP, 1.10f);
+
+        TREE[Game.T_BOOM][1][0] = new UpgradeDef("Long Reach",     200, 1.0f, 1.30f, 0, 1, SP_NONE, 1f);
+        TREE[Game.T_BOOM][1][1] = new UpgradeDef("Sonic Boomerang",400, 1.10f,1.10f, 1, 2, SP_NONE, 1.20f);
+        TREE[Game.T_BOOM][1][2] = new UpgradeDef("Turbo Charge",   780, 1.25f,1.15f, 1, 3, SP_LEAD_POP, 1.20f);
+
+        // ------- Mortar (T_MORTAR) -------
+        TREE[Game.T_MORTAR][0][0] = new UpgradeDef("Bigger Shells", 320, 1.0f, 1.0f, 1, 0, SP_NONE, 1f);
+        TREE[Game.T_MORTAR][0][1] = new UpgradeDef("Heavy Shells",  600, 1.0f, 1.0f, 2, 2, SP_NONE, 1f);
+        TREE[Game.T_MORTAR][0][2] = new UpgradeDef("Pop & Awe",    1100, 1.0f, 1.05f,3, 5, SP_BIGGER_BOMBS, 1f);
+
+        TREE[Game.T_MORTAR][1][0] = new UpgradeDef("Increased Rate",280, 1.40f,1.0f, 0, 0, SP_NONE, 1.10f);
+        TREE[Game.T_MORTAR][1][1] = new UpgradeDef("Burny Stuff",   520, 1.30f,1.0f, 1, 1, SP_NONE, 1f);
+        TREE[Game.T_MORTAR][1][2] = new UpgradeDef("The Big One",  1050, 1.10f,1.0f, 4, 3, SP_BIGGER_BOMBS, 1f);
+
+        // ------- Banana Farm (T_FARM) -------
+        TREE[Game.T_FARM][0][0] = new UpgradeDef("More Bananas",   300, 1.40f,1.0f,  0, 0, SP_NONE, 1f);
+        TREE[Game.T_FARM][0][1] = new UpgradeDef("Greater Yield",  600, 1.30f,1.0f,  0, 0, SP_NONE, 1f);
+        TREE[Game.T_FARM][0][2] = new UpgradeDef("Banana Plantation",1200,1.25f,1.0f,0, 0, SP_NONE, 1f);
+
+        TREE[Game.T_FARM][1][0] = new UpgradeDef("Long Life Banana",250, 1.20f,1.0f, 0, 0, SP_NONE, 1f);
+        TREE[Game.T_FARM][1][1] = new UpgradeDef("Valuable Bananas",480, 1.20f,1.0f, 0, 0, SP_NONE, 1f);
+        TREE[Game.T_FARM][1][2] = new UpgradeDef("Banana Republic",1000, 1.30f,1.0f, 0, 0, SP_NONE, 1f);
     }
 }

@@ -22,7 +22,16 @@ public class Game {
     public static final int S_TOWERS = 2;
     public static final int S_PLAYING = 3;
     public static final int S_HOWTO = 4;
+    public static final int S_SETTINGS = 5;
+    public static final int S_RECORDS = 6;
     int state = S_MAIN;
+
+    // settings (decorative toggles)
+    boolean sfxOn = true;
+    boolean musicOn = true;
+    boolean autoStart = false;
+    // per-map best wave (in-session)
+    java.util.HashMap<String, Integer> bestWave = new java.util.HashMap<>();
 
     // ---------- screen ----------
     int screenW = 1920, screenH = 1080;
@@ -93,7 +102,8 @@ public class Game {
 
     // tower types
     public static final int T_DART = 0, T_TACK = 1, T_BOMB = 2, T_SNIPER = 3,
-            T_NINJA = 4, T_ICE = 5, T_SUPER = 6, T_WIZARD = 7;
+            T_NINJA = 4, T_ICE = 5, T_SUPER = 6, T_WIZARD = 7,
+            T_GLUE = 8, T_BOOM = 9, T_MORTAR = 10, T_FARM = 11;
 
     // bloon types
     public static final int B_RED = 0, B_BLUE = 1, B_GREEN = 2, B_YELLOW = 3,
@@ -344,33 +354,280 @@ public class Game {
 
     void drawTowerBase(Canvas c, float cx, float cy, float r, int type) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        // shadow
         p.setColor(0x66000000);
-        c.drawCircle(cx + r * 0.12f, cy + r * 0.2f, r * 1.05f, p);
-        // outer rim
+        c.drawOval(new RectF(cx - r * 1.0f, cy + r * 0.78f, cx + r * 1.0f, cy + r * 1.02f), p);
+        // wood platform
         p.setColor(0xFF3E2723);
-        c.drawCircle(cx, cy, r * 1.03f, p);
+        c.drawCircle(cx, cy + r * 0.55f, r * 0.95f, p);
         p.setColor(0xFF8D6E63);
-        c.drawCircle(cx, cy, r * 0.95f, p);
-        // body
+        c.drawCircle(cx, cy + r * 0.55f, r * 0.85f, p);
+        p.setColor(0xFFA1887F);
+        c.drawOval(new RectF(cx - r * 0.7f, cy + r * 0.35f, cx + r * 0.7f, cy + r * 0.65f), p);
+        p.setColor(0xFF6D4C41);
+        for (int k = -2; k <= 2; k++) {
+            c.drawLine(cx + k * r * 0.3f, cy + r * 0.4f, cx + k * r * 0.3f, cy + r * 0.7f, p);
+        }
+
+        // Tack and Ice are pure devices (no character)
+        if (type == T_TACK || type == T_ICE) {
+            int c1 = Tower.BODY_COLOR[type];
+            int c2 = Tower.BODY_COLOR2[type];
+            RadialGradient bg = new RadialGradient(cx - r * 0.3f, cy - r * 0.3f, r * 1.4f,
+                    c1, c2, Shader.TileMode.CLAMP);
+            p.setShader(bg);
+            c.drawCircle(cx, cy, r * 0.7f, p);
+            p.setShader(null);
+            p.setColor(Tower.darken(c2, 0.7f));
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(Math.max(2, r * 0.07f));
+            c.drawCircle(cx, cy, r * 0.7f, p);
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(0x77FFFFFF);
+            c.drawCircle(cx - r * 0.25f, cy - r * 0.3f, r * 0.2f, p);
+            return;
+        }
+
         int c1 = Tower.BODY_COLOR[type];
         int c2 = Tower.BODY_COLOR2[type];
-        RadialGradient bodyGrad = new RadialGradient(cx - r * 0.3f, cy - r * 0.3f, r * 1.4f,
+
+        // ----- SEAL BODY -----
+        // back fluke peeks behind
+        p.setColor(Tower.darken(c2, 0.7f));
+        Path fluke = new Path();
+        fluke.moveTo(cx - r * 0.55f, cy + r * 0.45f);
+        fluke.quadTo(cx - r * 0.95f, cy + r * 0.55f, cx - r * 0.7f, cy + r * 0.7f);
+        fluke.lineTo(cx - r * 0.4f, cy + r * 0.55f);
+        fluke.close();
+        c.drawPath(fluke, p);
+        Path fluke2 = new Path();
+        fluke2.moveTo(cx + r * 0.55f, cy + r * 0.45f);
+        fluke2.quadTo(cx + r * 0.95f, cy + r * 0.55f, cx + r * 0.7f, cy + r * 0.7f);
+        fluke2.lineTo(cx + r * 0.4f, cy + r * 0.55f);
+        fluke2.close();
+        c.drawPath(fluke2, p);
+
+        // body oval with gradient
+        RadialGradient bodyGrad = new RadialGradient(cx - r * 0.2f, cy - r * 0.1f, r * 1.4f,
                 c1, c2, Shader.TileMode.CLAMP);
         p.setShader(bodyGrad);
-        c.drawCircle(cx, cy, r * 0.78f, p);
+        c.drawOval(new RectF(cx - r * 0.55f, cy - r * 0.15f, cx + r * 0.55f, cy + r * 0.6f), p);
         p.setShader(null);
-        // outline
-        p.setColor(Tower.darken(c2, 0.7f));
+        p.setColor(Tower.darken(c2, 0.55f));
         p.setStyle(Paint.Style.STROKE);
-        p.setStrokeWidth(Math.max(2, r * 0.07f));
-        c.drawCircle(cx, cy, r * 0.78f, p);
+        p.setStrokeWidth(Math.max(2, r * 0.05f));
+        c.drawOval(new RectF(cx - r * 0.55f, cy - r * 0.15f, cx + r * 0.55f, cy + r * 0.6f), p);
         p.setStyle(Paint.Style.FILL);
-        // highlight
-        p.setColor(0x88FFFFFF);
-        c.drawCircle(cx - r * 0.32f, cy - r * 0.36f, r * 0.25f, p);
-        // SEAL face on most towers (Tack/Ice are covered by their devices)
-        if (type != T_TACK && type != T_ICE) {
-            drawSealFace(c, p, cx, cy, r * 0.85f);
+        // belly
+        p.setColor(0xFFECEFF1);
+        c.drawOval(new RectF(cx - r * 0.32f, cy + r * 0.05f, cx + r * 0.32f, cy + r * 0.55f), p);
+        p.setColor(0xFFCFD8DC);
+        c.drawOval(new RectF(cx - r * 0.25f, cy + r * 0.3f, cx + r * 0.25f, cy + r * 0.52f), p);
+
+        // ----- HEAD -----
+        p.setShader(bodyGrad);
+        c.drawCircle(cx, cy - r * 0.35f, r * 0.45f, p);
+        p.setShader(null);
+        p.setColor(Tower.darken(c2, 0.55f));
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(2, r * 0.05f));
+        c.drawCircle(cx, cy - r * 0.35f, r * 0.45f, p);
+        p.setStyle(Paint.Style.FILL);
+        // face oval (light)
+        p.setColor(0xFFECEFF1);
+        c.drawOval(new RectF(cx - r * 0.3f, cy - r * 0.45f, cx + r * 0.3f, cy - r * 0.1f), p);
+        // muzzle puffs (rounded)
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(cx - r * 0.09f, cy - r * 0.18f, r * 0.09f, p);
+        c.drawCircle(cx + r * 0.09f, cy - r * 0.18f, r * 0.09f, p);
+        // eyes
+        p.setColor(0xFF263238);
+        c.drawCircle(cx - r * 0.13f, cy - r * 0.36f, r * 0.075f, p);
+        c.drawCircle(cx + r * 0.13f, cy - r * 0.36f, r * 0.075f, p);
+        // eye shine
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(cx - r * 0.11f, cy - r * 0.39f, r * 0.025f, p);
+        c.drawCircle(cx + r * 0.15f, cy - r * 0.39f, r * 0.025f, p);
+        // nose
+        p.setColor(0xFF263238);
+        c.drawCircle(cx, cy - r * 0.22f, r * 0.05f, p);
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(cx - r * 0.012f, cy - r * 0.235f, r * 0.018f, p);
+        // whisker dots
+        p.setColor(0xFF455A64);
+        for (int i = 0; i < 3; i++) {
+            float dx = r * (0.15f + i * 0.05f);
+            c.drawCircle(cx - dx, cy - r * 0.16f, r * 0.013f, p);
+            c.drawCircle(cx + dx, cy - r * 0.16f, r * 0.013f, p);
+        }
+        // mouth
+        p.setColor(0xFF263238);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1.5f, r * 0.022f));
+        Path mouth = new Path();
+        mouth.moveTo(cx - r * 0.05f, cy - r * 0.09f);
+        mouth.quadTo(cx, cy - r * 0.04f, cx + r * 0.05f, cy - r * 0.09f);
+        c.drawPath(mouth, p);
+        p.setStyle(Paint.Style.FILL);
+
+        // role-specific accessory (hat / mask / band)
+        drawTowerAccessory(c, p, cx, cy, r, type);
+    }
+
+    void drawTowerAccessory(Canvas c, Paint p, float cx, float cy, float r, int type) {
+        switch (type) {
+            case T_SNIPER: {
+                // dark goggles
+                p.setColor(0xFF263238);
+                c.drawRect(cx - r * 0.32f, cy - r * 0.42f, cx + r * 0.32f, cy - r * 0.3f, p);
+                p.setColor(0xFF1A237E);
+                c.drawCircle(cx - r * 0.13f, cy - r * 0.36f, r * 0.08f, p);
+                c.drawCircle(cx + r * 0.13f, cy - r * 0.36f, r * 0.08f, p);
+                p.setColor(0xFFFFEB3B);
+                c.drawCircle(cx - r * 0.11f, cy - r * 0.39f, r * 0.02f, p);
+                c.drawCircle(cx + r * 0.15f, cy - r * 0.39f, r * 0.02f, p);
+                break;
+            }
+            case T_NINJA: {
+                // red headband
+                p.setColor(0xFFE53935);
+                c.drawRect(cx - r * 0.4f, cy - r * 0.52f, cx + r * 0.4f, cy - r * 0.42f, p);
+                p.setColor(0xFFFFFFFF);
+                Path k = new Path();
+                k.moveTo(cx + r * 0.0f, cy - r * 0.51f);
+                k.lineTo(cx + r * 0.05f, cy - r * 0.42f);
+                k.lineTo(cx - r * 0.05f, cy - r * 0.42f);
+                k.close();
+                c.drawPath(k, p);
+                // bandana tails
+                p.setColor(0xFFE53935);
+                c.drawRect(cx - r * 0.45f, cy - r * 0.5f, cx - r * 0.4f, cy - r * 0.35f, p);
+                c.drawRect(cx + r * 0.4f, cy - r * 0.5f, cx + r * 0.45f, cy - r * 0.35f, p);
+                break;
+            }
+            case T_SUPER: {
+                // red cape behind body
+                p.setColor(0xFFE53935);
+                Path cape = new Path();
+                cape.moveTo(cx - r * 0.4f, cy + r * 0.0f);
+                cape.lineTo(cx - r * 0.7f, cy + r * 0.55f);
+                cape.lineTo(cx + r * 0.7f, cy + r * 0.55f);
+                cape.lineTo(cx + r * 0.4f, cy + r * 0.0f);
+                cape.close();
+                c.drawPath(cape, p);
+                // yellow mask
+                p.setColor(0xFFFFEB3B);
+                c.drawRect(cx - r * 0.32f, cy - r * 0.43f, cx + r * 0.32f, cy - r * 0.3f, p);
+                p.setColor(0xFFE53935);
+                c.drawRect(cx - r * 0.32f, cy - r * 0.43f, cx + r * 0.32f, cy - r * 0.38f, p);
+                p.setColor(0xFFFFFFFF);
+                c.drawRect(cx - r * 0.18f, cy - r * 0.38f, cx + r * 0.18f, cy - r * 0.32f, p);
+                p.setColor(0xFF1A237E);
+                c.drawCircle(cx - r * 0.13f, cy - r * 0.36f, r * 0.05f, p);
+                c.drawCircle(cx + r * 0.13f, cy - r * 0.36f, r * 0.05f, p);
+                break;
+            }
+            case T_WIZARD: {
+                // pointy hat
+                p.setColor(0xFF311B92);
+                Path hat = new Path();
+                hat.moveTo(cx - r * 0.45f, cy - r * 0.45f);
+                hat.lineTo(cx + r * 0.45f, cy - r * 0.45f);
+                hat.lineTo(cx + r * 0.05f, cy - r * 1.05f);
+                hat.close();
+                c.drawPath(hat, p);
+                p.setColor(0xFF673AB7);
+                c.drawRect(cx - r * 0.48f, cy - r * 0.5f, cx + r * 0.48f, cy - r * 0.4f, p);
+                // stars on hat
+                p.setColor(0xFFFFEB3B);
+                c.drawCircle(cx - r * 0.1f, cy - r * 0.7f, r * 0.05f, p);
+                c.drawCircle(cx + r * 0.05f, cy - r * 0.5f, r * 0.03f, p);
+                // hat tip
+                p.setColor(0xFFFFEB3B);
+                c.drawCircle(cx + r * 0.05f, cy - r * 1.05f, r * 0.07f, p);
+                break;
+            }
+            case T_BOMB: {
+                // small helmet
+                p.setColor(0xFF263238);
+                c.drawArc(new RectF(cx - r * 0.45f, cy - r * 0.65f, cx + r * 0.45f, cy - r * 0.25f), 180, 180, false, p);
+                p.setColor(0xFFB71C1C);
+                c.drawRect(cx - r * 0.45f, cy - r * 0.48f, cx + r * 0.45f, cy - r * 0.42f, p);
+                // emblem
+                p.setColor(0xFFFFEB3B);
+                c.drawCircle(cx, cy - r * 0.55f, r * 0.07f, p);
+                break;
+            }
+            case T_DART: {
+                // green bandana
+                p.setColor(0xFF1B5E20);
+                c.drawRect(cx - r * 0.4f, cy - r * 0.5f, cx + r * 0.4f, cy - r * 0.4f, p);
+                p.setColor(0xFF66BB6A);
+                Path leaf = new Path();
+                leaf.moveTo(cx + r * 0.3f, cy - r * 0.5f);
+                leaf.lineTo(cx + r * 0.42f, cy - r * 0.62f);
+                leaf.lineTo(cx + r * 0.4f, cy - r * 0.4f);
+                leaf.close();
+                c.drawPath(leaf, p);
+                break;
+            }
+            case T_GLUE: {
+                // yellow chef hat
+                p.setColor(0xFFFFEB3B);
+                Path puff = new Path();
+                puff.addCircle(cx - r * 0.18f, cy - r * 0.65f, r * 0.18f, Path.Direction.CW);
+                puff.addCircle(cx + r * 0.18f, cy - r * 0.65f, r * 0.18f, Path.Direction.CW);
+                puff.addCircle(cx, cy - r * 0.78f, r * 0.2f, Path.Direction.CW);
+                c.drawPath(puff, p);
+                p.setColor(0xFFFBC02D);
+                c.drawRect(cx - r * 0.32f, cy - r * 0.5f, cx + r * 0.32f, cy - r * 0.4f, p);
+                break;
+            }
+            case T_BOOM: {
+                // tribal headband + feather
+                p.setColor(0xFF4E342E);
+                c.drawRect(cx - r * 0.4f, cy - r * 0.5f, cx + r * 0.4f, cy - r * 0.4f, p);
+                // feather
+                p.setColor(0xFFE53935);
+                Path feather = new Path();
+                feather.moveTo(cx + r * 0.0f, cy - r * 0.5f);
+                feather.lineTo(cx + r * 0.18f, cy - r * 0.9f);
+                feather.lineTo(cx - r * 0.05f, cy - r * 0.5f);
+                feather.close();
+                c.drawPath(feather, p);
+                p.setColor(0xFFFFEB3B);
+                feather.reset();
+                feather.moveTo(cx + r * 0.0f, cy - r * 0.5f);
+                feather.lineTo(cx + r * 0.08f, cy - r * 0.85f);
+                feather.lineTo(cx - r * 0.02f, cy - r * 0.55f);
+                feather.close();
+                c.drawPath(feather, p);
+                break;
+            }
+            case T_MORTAR: {
+                // army cap
+                p.setColor(0xFF2E7D32);
+                c.drawArc(new RectF(cx - r * 0.5f, cy - r * 0.65f, cx + r * 0.5f, cy - r * 0.25f), 180, 180, false, p);
+                p.setColor(0xFF1B5E20);
+                c.drawRect(cx - r * 0.5f, cy - r * 0.42f, cx + r * 0.5f, cy - r * 0.32f, p);
+                // visor
+                p.setColor(0xFF1B5E20);
+                c.drawRect(cx - r * 0.4f, cy - r * 0.42f, cx + r * 0.4f, cy - r * 0.36f, p);
+                // star
+                p.setColor(0xFFFFEB3B);
+                c.drawCircle(cx, cy - r * 0.55f, r * 0.06f, p);
+                break;
+            }
+            case T_FARM: {
+                // straw hat
+                p.setColor(0xFFFFC107);
+                c.drawOval(new RectF(cx - r * 0.6f, cy - r * 0.55f, cx + r * 0.6f, cy - r * 0.38f), p);
+                p.setColor(0xFFFFA726);
+                c.drawOval(new RectF(cx - r * 0.3f, cy - r * 0.75f, cx + r * 0.3f, cy - r * 0.45f), p);
+                p.setColor(0xFFE53935);
+                c.drawRect(cx - r * 0.32f, cy - r * 0.55f, cx + r * 0.32f, cy - r * 0.48f, p);
+                break;
+            }
         }
     }
 
@@ -424,151 +681,237 @@ public class Game {
 
     void drawTowerGun(Canvas c, float cx, float cy, float r, int type) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        // Device-only towers
+        if (type == T_TACK) {
+            tackGun(c, p, cx, cy, r);
+            return;
+        }
+        if (type == T_ICE) {
+            iceGun(c, p, cx, cy, r);
+            return;
+        }
+        if (type == T_FARM) {
+            // farm has no rotating part — empty gun bitmap
+            return;
+        }
+
+        // Generic SEAL flippers holding a weapon — drawn pointing right (+x direction)
+        int bodyC = Tower.darken(Tower.BODY_COLOR2[type], 0.85f);
+        int bodyL = Tower.darken(Tower.BODY_COLOR[type], 0.9f);
+        // upper flipper
+        p.setColor(bodyC);
+        Path upper = new Path();
+        upper.moveTo(cx + r * 0.05f, cy - r * 0.2f);
+        upper.quadTo(cx + r * 0.4f, cy - r * 0.3f, cx + r * 0.75f, cy - r * 0.1f);
+        upper.lineTo(cx + r * 0.75f, cy + r * 0.05f);
+        upper.quadTo(cx + r * 0.35f, cy - r * 0.15f, cx + r * 0.05f, cy - r * 0.05f);
+        upper.close();
+        c.drawPath(upper, p);
+        // lower flipper
+        Path lower = new Path();
+        lower.moveTo(cx + r * 0.05f, cy + r * 0.2f);
+        lower.quadTo(cx + r * 0.4f, cy + r * 0.3f, cx + r * 0.75f, cy + r * 0.1f);
+        lower.lineTo(cx + r * 0.75f, cy - r * 0.05f);
+        lower.quadTo(cx + r * 0.35f, cy + r * 0.15f, cx + r * 0.05f, cy + r * 0.05f);
+        lower.close();
+        c.drawPath(lower, p);
+        // flipper highlights
+        p.setColor(bodyL);
+        c.drawOval(new RectF(cx + r * 0.5f, cy - r * 0.18f, cx + r * 0.8f, cy - r * 0.0f), p);
+        c.drawOval(new RectF(cx + r * 0.5f, cy + r * 0.0f, cx + r * 0.8f, cy + r * 0.18f), p);
+
+        // weapon drawn in the grip at ~(cx + r*0.8, cy)
+        float gx = cx + r * 0.75f;
         switch (type) {
             case T_DART: {
-                p.setColor(0xFF6D4C41);
-                c.drawRect(cx, cy - r * 0.16f, cx + r * 1.05f, cy + r * 0.16f, p);
-                p.setColor(0xFFFAFAFA);
+                // wood stock
+                p.setColor(0xFF5D4037);
+                c.drawRect(gx - r * 0.18f, cy - r * 0.1f, gx + r * 0.3f, cy + r * 0.1f, p);
+                // metal barrel
+                p.setColor(0xFF424242);
+                c.drawRect(gx - r * 0.3f, cy - r * 0.06f, gx + r * 0.55f, cy + r * 0.06f, p);
+                // dart tip
                 Path tri = new Path();
-                tri.moveTo(cx + r * 1.05f, cy - r * 0.28f);
-                tri.lineTo(cx + r * 1.45f, cy);
-                tri.lineTo(cx + r * 1.05f, cy + r * 0.28f);
+                tri.moveTo(gx + r * 0.55f, cy - r * 0.2f);
+                tri.lineTo(gx + r * 0.85f, cy);
+                tri.lineTo(gx + r * 0.55f, cy + r * 0.2f);
                 tri.close();
+                p.setColor(0xFFFAFAFA);
                 c.drawPath(tri, p);
-                p.setColor(0xFFE53935);
-                c.drawRect(cx + r * 0.0f, cy - r * 0.3f, cx + r * 0.18f, cy + r * 0.3f, p);
-                break;
-            }
-            case T_TACK: {
-                p.setColor(0xFF424242);
-                for (int i = 0; i < 8; i++) {
-                    c.save(); c.rotate(i * 45f, cx, cy);
-                    Path nail = new Path();
-                    nail.moveTo(cx + r * 0.3f, cy - r * 0.06f);
-                    nail.lineTo(cx + r * 1.1f, cy);
-                    nail.lineTo(cx + r * 0.3f, cy + r * 0.06f);
-                    nail.close();
-                    c.drawPath(nail, p);
-                    c.restore();
-                }
-                p.setColor(0xFFE0E0E0);
-                c.drawCircle(cx, cy, r * 0.22f, p);
-                p.setColor(0xFF424242);
-                p.setStyle(Paint.Style.STROKE);
-                p.setStrokeWidth(Math.max(2, r * 0.04f));
-                c.drawCircle(cx, cy, r * 0.22f, p);
-                p.setStyle(Paint.Style.FILL);
+                p.setColor(0xFF263238);
+                c.drawLine(gx + r * 0.55f, cy - r * 0.2f, gx + r * 0.85f, cy, p);
+                c.drawLine(gx + r * 0.85f, cy, gx + r * 0.55f, cy + r * 0.2f, p);
                 break;
             }
             case T_BOMB: {
+                // cannon
                 p.setColor(0xFF263238);
-                RectF barrel = new RectF(cx - r * 0.05f, cy - r * 0.24f, cx + r * 0.95f, cy + r * 0.24f);
+                RectF barrel = new RectF(gx - r * 0.15f, cy - r * 0.22f, gx + r * 0.55f, cy + r * 0.22f);
                 c.drawRoundRect(barrel, r * 0.1f, r * 0.1f, p);
                 p.setColor(0xFF455A64);
-                c.drawCircle(cx + r * 0.95f, cy, r * 0.28f, p);
+                c.drawCircle(gx + r * 0.55f, cy, r * 0.26f, p);
+                p.setColor(0xFF263238);
+                c.drawCircle(gx + r * 0.55f, cy, r * 0.18f, p);
                 p.setColor(0xFFFFCDD2);
-                c.drawCircle(cx - r * 0.05f, cy, r * 0.1f, p);
+                c.drawCircle(gx - r * 0.12f, cy - r * 0.18f, r * 0.07f, p);
                 break;
             }
             case T_SNIPER: {
-                p.setColor(0xFF1A237E);
-                c.drawRect(cx - r * 0.25f, cy - r * 0.12f, cx + r * 1.25f, cy + r * 0.12f, p);
+                // rifle
+                p.setColor(0xFF263238);
+                c.drawRect(gx - r * 0.3f, cy - r * 0.1f, gx + r * 0.7f, cy + r * 0.1f, p);
                 p.setColor(0xFF424242);
-                c.drawRect(cx + r * 1.05f, cy - r * 0.2f, cx + r * 1.25f, cy + r * 0.2f, p);
+                c.drawRect(gx + r * 0.55f, cy - r * 0.18f, gx + r * 0.7f, cy + r * 0.18f, p);
+                p.setColor(0xFF1A237E);
+                // scope
+                c.drawRect(gx - r * 0.1f, cy - r * 0.2f, gx + r * 0.2f, cy - r * 0.05f, p);
                 p.setColor(0xFFFFEB3B);
-                c.drawCircle(cx - r * 0.2f, cy, r * 0.16f, p);
+                c.drawCircle(gx + r * 0.05f, cy - r * 0.13f, r * 0.05f, p);
                 p.setColor(0xFFB71C1C);
-                c.drawCircle(cx - r * 0.2f, cy, r * 0.08f, p);
+                c.drawCircle(gx + r * 0.05f, cy - r * 0.13f, r * 0.03f, p);
                 break;
             }
             case T_NINJA: {
-                p.setColor(0xFF263238);
-                c.drawRect(cx - r * 0.05f, cy - r * 0.18f, cx + r * 0.45f, cy + r * 0.18f, p);
-                p.setColor(0xFFE53935);
-                c.drawRect(cx - r * 0.05f, cy - r * 0.22f, cx + r * 0.55f, cy - r * 0.1f, p);
-                // shuriken in front
+                // shuriken thrown in front
                 p.setColor(0xFFB0BEC5);
                 for (int i = 0; i < 4; i++) {
-                    c.save(); c.rotate(i * 90, cx + r * 0.7f, cy);
-                    c.drawRect(cx + r * 0.55f, cy - r * 0.06f, cx + r * 0.95f, cy + r * 0.06f, p);
+                    c.save();
+                    c.rotate(i * 90, gx + r * 0.3f, cy);
+                    c.drawRect(gx + r * 0.15f, cy - r * 0.05f, gx + r * 0.5f, cy + r * 0.05f, p);
                     c.restore();
                 }
-                p.setColor(0xFF607D8B);
-                c.drawCircle(cx + r * 0.7f, cy, r * 0.1f, p);
-                break;
-            }
-            case T_ICE: {
-                p.setColor(0xFFB3E5FC);
-                c.drawCircle(cx, cy, r * 0.55f, p);
-                p.setColor(0xFF0277BD);
-                for (int i = 0; i < 6; i++) {
-                    c.save(); c.rotate(i * 60, cx, cy);
-                    c.drawRect(cx + r * 0.05f, cy - r * 0.06f, cx + r * 0.65f, cy + r * 0.06f, p);
-                    // small spikes
-                    c.drawRect(cx + r * 0.4f, cy - r * 0.15f, cx + r * 0.5f, cy + r * 0.15f, p);
-                    c.restore();
-                }
-                p.setColor(0xFFFFFFFF);
-                c.drawCircle(cx, cy, r * 0.18f, p);
+                p.setColor(0xFF263238);
+                c.drawCircle(gx + r * 0.3f, cy, r * 0.08f, p);
+                p.setColor(0xFFE0E0E0);
+                c.drawCircle(gx + r * 0.3f, cy, r * 0.04f, p);
                 break;
             }
             case T_SUPER: {
-                // cape behind
-                p.setColor(0xFFE53935);
-                Path cape = new Path();
-                cape.moveTo(cx - r * 0.3f, cy - r * 0.5f);
-                cape.lineTo(cx + r * 0.1f, cy + r * 0.7f);
-                cape.lineTo(cx - r * 0.7f, cy + r * 0.7f);
-                cape.lineTo(cx - r * 0.5f, cy - r * 0.5f);
-                cape.close();
-                c.drawPath(cape, p);
-                p.setColor(0xFFB71C1C);
-                c.drawRect(cx - r * 0.6f, cy - r * 0.55f, cx - r * 0.25f, cy - r * 0.4f, p);
-                // body Y
+                // glowing fist / energy ball
+                p.setColor(0x66FFEB3B);
+                c.drawCircle(gx + r * 0.3f, cy, r * 0.32f, p);
                 p.setColor(0xFFFFEB3B);
-                c.drawCircle(cx, cy, r * 0.5f, p);
-                p.setColor(0xFFFFC107);
-                p.setStyle(Paint.Style.STROKE);
-                p.setStrokeWidth(Math.max(2, r * 0.05f));
-                c.drawCircle(cx, cy, r * 0.5f, p);
-                p.setStyle(Paint.Style.FILL);
-                // visor
-                p.setColor(0xFF1A237E);
-                c.drawRect(cx - r * 0.15f, cy - r * 0.08f, cx + r * 0.3f, cy + r * 0.04f, p);
+                c.drawCircle(gx + r * 0.3f, cy, r * 0.22f, p);
                 p.setColor(0xFFFFFFFF);
-                c.drawRect(cx - r * 0.1f, cy - r * 0.06f, cx + r * 0.08f, cy + r * 0.0f, p);
-                // arms gauntlet
-                p.setColor(0xFFFFEB3B);
-                c.drawRect(cx + r * 0.4f, cy - r * 0.12f, cx + r * 1.05f, cy + r * 0.12f, p);
+                c.drawCircle(gx + r * 0.22f, cy - r * 0.05f, r * 0.1f, p);
                 p.setColor(0xFFFF6F00);
-                c.drawCircle(cx + r * 1.1f, cy, r * 0.15f, p);
+                c.drawCircle(gx + r * 0.45f, cy, r * 0.06f, p);
                 break;
             }
             case T_WIZARD: {
-                // robe
-                p.setColor(0xFF6A1B9A);
-                c.drawCircle(cx, cy, r * 0.5f, p);
-                // hat
-                Path tri = new Path();
-                tri.moveTo(cx - r * 0.4f, cy - r * 0.18f);
-                tri.lineTo(cx + r * 0.4f, cy - r * 0.18f);
-                tri.lineTo(cx, cy - r * 1.0f);
-                tri.close();
-                p.setColor(0xFF311B92);
-                c.drawPath(tri, p);
-                p.setColor(0xFFFFEB3B);
-                c.drawCircle(cx + r * 0.05f, cy - r * 0.5f, r * 0.08f, p);
-                c.drawCircle(cx - r * 0.18f, cy - r * 0.32f, r * 0.05f, p);
-                // staff
+                // magic staff
                 p.setColor(0xFF6D4C41);
-                c.drawRect(cx + r * 0.1f, cy - r * 0.1f, cx + r * 1.0f, cy + r * 0.1f, p);
+                c.drawRect(gx - r * 0.15f, cy - r * 0.05f, gx + r * 0.55f, cy + r * 0.05f, p);
+                p.setColor(0xFF4E342E);
+                c.drawRect(gx - r * 0.15f, cy - r * 0.07f, gx + r * 0.0f, cy - r * 0.05f, p);
+                // orb
+                p.setColor(0x88E040FB);
+                c.drawCircle(gx + r * 0.6f, cy, r * 0.22f, p);
                 p.setColor(0xFFE040FB);
-                c.drawCircle(cx + r * 1.05f, cy, r * 0.22f, p);
+                c.drawCircle(gx + r * 0.6f, cy, r * 0.15f, p);
                 p.setColor(0xFFFFFFFF);
-                c.drawCircle(cx + r * 1.05f, cy, r * 0.1f, p);
+                c.drawCircle(gx + r * 0.58f, cy - r * 0.05f, r * 0.07f, p);
+                break;
+            }
+            case T_GLUE: {
+                // glue gun shape
+                p.setColor(0xFFFBC02D);
+                RectF g1 = new RectF(gx - r * 0.18f, cy - r * 0.16f, gx + r * 0.45f, cy + r * 0.16f);
+                c.drawRoundRect(g1, r * 0.06f, r * 0.06f, p);
+                p.setColor(0xFFFFEB3B);
+                c.drawRoundRect(new RectF(gx - r * 0.14f, cy - r * 0.12f, gx + r * 0.41f, cy + r * 0.12f), r * 0.05f, r * 0.05f, p);
+                // nozzle
+                p.setColor(0xFFFFA000);
+                c.drawCircle(gx + r * 0.5f, cy, r * 0.1f, p);
+                // glue drip
+                p.setColor(0xFFFFEB3B);
+                c.drawCircle(gx + r * 0.65f, cy + r * 0.06f, r * 0.07f, p);
+                c.drawCircle(gx + r * 0.72f, cy + r * 0.12f, r * 0.04f, p);
+                break;
+            }
+            case T_BOOM: {
+                // boomerang held
+                p.setColor(0xFF5D4037);
+                Path bm = new Path();
+                bm.moveTo(gx + r * 0.1f, cy - r * 0.3f);
+                bm.quadTo(gx + r * 0.55f, cy, gx + r * 0.1f, cy + r * 0.3f);
+                bm.quadTo(gx + r * 0.3f, cy, gx + r * 0.1f, cy - r * 0.3f);
+                bm.close();
+                c.drawPath(bm, p);
+                p.setColor(0xFF8D6E63);
+                Path inner = new Path();
+                inner.moveTo(gx + r * 0.15f, cy - r * 0.22f);
+                inner.quadTo(gx + r * 0.45f, cy, gx + r * 0.15f, cy + r * 0.22f);
+                inner.quadTo(gx + r * 0.28f, cy, gx + r * 0.15f, cy - r * 0.22f);
+                inner.close();
+                c.drawPath(inner, p);
+                // grip wrap
+                p.setColor(0xFFE53935);
+                c.drawRect(gx + r * 0.14f, cy - r * 0.08f, gx + r * 0.18f, cy + r * 0.08f, p);
+                break;
+            }
+            case T_MORTAR: {
+                // mortar tube tilted up (drawn vertically; rotation will tilt)
+                p.setColor(0xFF263238);
+                Path t1 = new Path();
+                t1.moveTo(gx - r * 0.1f, cy - r * 0.05f);
+                t1.lineTo(gx + r * 0.05f, cy - r * 0.5f);
+                t1.lineTo(gx + r * 0.25f, cy - r * 0.5f);
+                t1.lineTo(gx + r * 0.15f, cy - r * 0.05f);
+                t1.close();
+                c.drawPath(t1, p);
+                p.setColor(0xFF424242);
+                c.drawCircle(gx + r * 0.15f, cy - r * 0.5f, r * 0.13f, p);
+                // tripod legs
+                p.setColor(0xFF263238);
+                c.drawRect(gx - r * 0.2f, cy - r * 0.05f, gx + r * 0.35f, cy + r * 0.05f, p);
                 break;
             }
         }
+    }
+
+    void tackGun(Canvas c, Paint p, float cx, float cy, float r) {
+        p.setColor(0xFF424242);
+        for (int i = 0; i < 10; i++) {
+            c.save(); c.rotate(i * 36f, cx, cy);
+            Path nail = new Path();
+            nail.moveTo(cx + r * 0.25f, cy - r * 0.06f);
+            nail.lineTo(cx + r * 1.05f, cy);
+            nail.lineTo(cx + r * 0.25f, cy + r * 0.06f);
+            nail.close();
+            c.drawPath(nail, p);
+            c.restore();
+        }
+        p.setColor(0xFFE0E0E0);
+        c.drawCircle(cx, cy, r * 0.28f, p);
+        p.setColor(0xFF424242);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(2, r * 0.04f));
+        c.drawCircle(cx, cy, r * 0.28f, p);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(cx - r * 0.07f, cy - r * 0.07f, r * 0.08f, p);
+    }
+
+    void iceGun(Canvas c, Paint p, float cx, float cy, float r) {
+        // big snowflake
+        p.setColor(0xFFB3E5FC);
+        c.drawCircle(cx, cy, r * 0.6f, p);
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(cx, cy, r * 0.45f, p);
+        p.setColor(0xFF0277BD);
+        for (int i = 0; i < 6; i++) {
+            c.save(); c.rotate(i * 60, cx, cy);
+            c.drawRect(cx, cy - r * 0.05f, cx + r * 0.65f, cy + r * 0.05f, p);
+            // small spikes
+            c.drawRect(cx + r * 0.45f, cy - r * 0.15f, cx + r * 0.55f, cy + r * 0.15f, p);
+            c.drawRect(cx + r * 0.25f, cy - r * 0.12f, cx + r * 0.32f, cy + r * 0.12f, p);
+            c.restore();
+        }
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(cx, cy, r * 0.15f, p);
+        p.setColor(0xFFE1F5FE);
+        c.drawCircle(cx - r * 0.05f, cy - r * 0.05f, r * 0.08f, p);
     }
 
     // ---------------- BG BAKING ----------------
@@ -941,6 +1284,10 @@ public class Game {
         if (waveActive || gameOver) return;
         if (path.size() < 2) return;
         wave++;
+        if (currentMap != null) {
+            Integer best = bestWave.get(currentMap.name);
+            if (best == null || wave > best) bestWave.put(currentMap.name, wave);
+        }
         waveQueue.clear();
         int[][] def = waveDef(wave);
         if (def == null || def.length == 0) return;
@@ -1066,6 +1413,8 @@ public class Game {
             case S_MAPS:    drawMapsMenu(c);  break;
             case S_TOWERS:  drawTowersMenu(c); break;
             case S_HOWTO:   drawHowToMenu(c); break;
+            case S_SETTINGS:drawSettingsMenu(c); break;
+            case S_RECORDS: drawRecordsMenu(c); break;
             case S_PLAYING: drawGame(c);      break;
         }
     }
@@ -1117,8 +1466,8 @@ public class Game {
 
         drawHUD(c);
 
-        if (selectedTower != null) drawUpgradePanel(c);
-        else drawTowerBar(c);
+        drawTowerBar(c); // right panel always visible
+        if (selectedTower != null) drawUpgradePanel(c); // bottom overlay
 
         if (popupTimer > 0 && popupMessage != null) {
             textP.setTextSize(tile * 0.7f);
@@ -1317,12 +1666,11 @@ public class Game {
     }
 
     void drawTowersTab(Canvas c, float startY) {
-        // 2 cols x 4 rows
         float pad = 8;
         int cols = 2;
         float cw = (panelW - pad * 3) / cols;
         float availH = screenH - startY - 10;
-        int rows = 4;
+        int rows = 6; // 12 towers / 2 cols
         float ch = (availH - pad * (rows + 1)) / rows;
         for (int rr = 0; rr < rows; rr++) {
             for (int cc = 0; cc < cols; cc++) {
@@ -1461,48 +1809,74 @@ public class Game {
         textP.setTextSize(tile * 0.38f);
     }
 
-    void drawUpgradePanel(Canvas c) {
-        paint.setShader(null);
-        LinearGradient lg = new LinearGradient(panelX, 0, screenW, 0, 0xFF263238, 0xFF1A237E, Shader.TileMode.CLAMP);
-        paint.setShader(lg);
-        c.drawRect(panelX, hudH, screenW, screenH, paint);
-        paint.setShader(null);
-        paint.setColor(0xFFFFEB3B);
-        c.drawRect(panelX, hudH, panelX + 4, screenH, paint);
+    // bottom upgrade panel geometry
+    float upX, upY, upW, upH;
 
-        // Header: tower icon and name
-        float headerY = hudH + 12;
-        float iconSize = panelW * 0.25f;
+    void drawUpgradePanel(Canvas c) {
+        // Bottom horizontal panel over the play area
+        upH = Math.min(playH * 0.5f, screenH * 0.36f);
+        upY = screenH - upH;
+        upX = 0;
+        upW = panelX;
+        paint.setShader(null);
+        // shadow above panel
+        paint.setColor(0x88000000);
+        c.drawRect(upX, upY - 8, upX + upW, upY, paint);
+        // panel body
+        LinearGradient lg = new LinearGradient(0, upY, 0, screenH, 0xFF263238, 0xFF1A237E, Shader.TileMode.CLAMP);
+        paint.setShader(lg);
+        c.drawRect(upX, upY, upX + upW, screenH, paint);
+        paint.setShader(null);
+        // top accent line
+        paint.setColor(0xFFFFEB3B);
+        c.drawRect(upX, upY, upX + upW, upY + 4, paint);
+
+        // ---- Left: Tower header section ----
+        float infoW = upW * 0.22f;
+        float pad = 12;
+        // big tower preview
+        float iconSize = Math.min(upH * 0.55f, infoW * 0.6f);
+        float ix = upX + pad;
+        float iy = upY + pad;
         Bitmap bmp = towerBmp[selectedTower.type];
         if (bmp != null) {
-            RectF dst = new RectF(panelX + 14, headerY, panelX + 14 + iconSize, headerY + iconSize);
+            RectF dst = new RectF(ix, iy, ix + iconSize, iy + iconSize);
+            // bg badge
+            paint.setColor(0xFF455A64);
+            c.drawRoundRect(new RectF(ix - 6, iy - 6, ix + iconSize + 6, iy + iconSize + 6), 14, 14, paint);
+            paint.setColor(0xFF607D8B);
+            c.drawRoundRect(new RectF(ix - 2, iy - 2, ix + iconSize + 2, iy + iconSize + 2), 12, 12, paint);
             c.drawBitmap(bmp, null, dst, paint);
             Bitmap gun = towerGunBmp[selectedTower.type];
             if (gun != null) c.drawBitmap(gun, null, dst, paint);
         }
-        textP.setColor(Color.WHITE);
-        textP.setTextSize(panelW * 0.07f);
+        textP.setColor(0xFFFFEB3B);
+        textP.setTextSize(upH * 0.13f);
         textP.setFakeBoldText(true);
-        c.drawText(Tower.NAME[selectedTower.type], panelX + iconSize + 28, headerY + iconSize * 0.45f, textP);
+        c.drawText(Tower.NAME[selectedTower.type], ix + iconSize + 8, iy + iconSize * 0.35f, textP);
         textP.setFakeBoldText(false);
-        textP.setTextSize(panelW * 0.05f);
+        textP.setTextSize(upH * 0.08f);
         textP.setColor(0xFFB0BEC5);
-        c.drawText("DMG " + selectedTower.damage()
-                        + " · R " + (int) selectedTower.range()
-                        + " · " + String.format("%.1f/s", selectedTower.rate()),
-                panelX + iconSize + 28, headerY + iconSize * 0.75f, textP);
+        c.drawText("DMG " + selectedTower.damage(), ix + iconSize + 8, iy + iconSize * 0.6f, textP);
+        c.drawText("R " + (int) selectedTower.range(), ix + iconSize + 8, iy + iconSize * 0.78f, textP);
+        c.drawText(String.format("%.1f/s", selectedTower.rate()), ix + iconSize + 8, iy + iconSize * 0.96f, textP);
 
-        // path A and B stacked
-        float pathTop = headerY + iconSize + 14;
-        float pathH = (screenH - pathTop - 80) / 2;
-        drawUpgradePathBig(c, panelX + 10, pathTop, panelW - 20, pathH, 0, 0xFFFFEB3B);
-        drawUpgradePathBig(c, panelX + 10, pathTop + pathH + 8, panelW - 20, pathH, 1, 0xFF40C4FF);
-
-        // sell + deselect buttons
+        // sell/close at bottom of info section
         int sellAmt = selectedTower.totalSpent * 7 / 10;
-        float by = screenH - 70;
-        drawPillButton(c, panelX + 10, by, (panelW - 30) * 0.55f, 60, "Sell $" + sellAmt, 0xFFD84315);
-        drawPillButton(c, panelX + 20 + (panelW - 30) * 0.55f, by, (panelW - 30) * 0.45f, 60, "CLOSE", 0xFF455A64);
+        float bh = upH * 0.16f;
+        float by = screenH - bh - pad;
+        drawPillButton(c, upX + pad, by, infoW * 0.55f, bh, "Sell $" + sellAmt, 0xFFD84315);
+        drawPillButton(c, upX + pad + infoW * 0.58f, by, infoW * 0.4f, bh, "Close", 0xFF607D8B);
+
+        // ---- Middle & right: two upgrade paths side by side ----
+        float pathX = upX + infoW + pad;
+        float pathTotalW = upW - infoW - pad * 2;
+        float pathW = (pathTotalW - pad) / 2f;
+        float pathY = upY + pad;
+        float pathH = upH - pad * 2;
+        drawUpgradePathBig(c, pathX, pathY, pathW, pathH, 0, 0xFFFFEB3B);
+        drawUpgradePathBig(c, pathX + pathW + pad, pathY, pathW, pathH, 1, 0xFF40C4FF);
+
         textP.setTextSize(tile * 0.38f);
     }
 
@@ -1714,15 +2088,15 @@ public class Game {
 
         // central button stack (animated pulse)
         float btnW = Math.min(screenW * 0.42f, 700);
-        float btnH = screenH * 0.11f;
-        float gap = btnH * 0.18f;
-        float startY = screenH * 0.42f;
+        float btnH = screenH * 0.09f;
+        float gap = btnH * 0.16f;
+        float startY = screenH * 0.34f;
         float cx = screenW * 0.5f;
-        String[] labels = {"QUICK PLAY", "WORLDS", "TOWERS", "HOW TO PLAY"};
-        int[] colors = {0xFF66BB6A, 0xFFFFA000, 0xFF42A5F5, 0xFFAB47BC};
-        int[] icons = {0, 1, 2, 3};
-        for (int i = 0; i < 4; i++) {
-            float scale = 1f + (float) Math.sin(menuAnim * 2.5f + i * 0.7f) * 0.015f;
+        String[] labels = {"QUICK PLAY", "WORLDS", "TOWERS", "RECORDS", "SETTINGS", "HOW TO PLAY"};
+        int[] colors = {0xFF66BB6A, 0xFFFFA000, 0xFF42A5F5, 0xFFFFEB3B, 0xFFB0BEC5, 0xFFAB47BC};
+        int[] icons = {0, 1, 2, 4, 5, 3};
+        for (int i = 0; i < 6; i++) {
+            float scale = 1f + (float) Math.sin(menuAnim * 2.5f + i * 0.7f) * 0.013f;
             float y = startY + i * (btnH + gap);
             float dh = btnH * (scale - 1f) / 2f;
             drawMenuButton(c, cx - btnW * scale / 2, y - dh, btnW * scale, btnH * scale, labels[i], colors[i], icons[i]);
@@ -1820,6 +2194,8 @@ public class Game {
             case 1: bmp = towerBmp[T_NINJA]; break;      // worlds
             case 2: bmp = towerBmp[T_WIZARD]; break;     // towers
             case 3: bmp = towerBmp[T_SUPER]; break;      // how to play
+            case 4: bmp = towerBmp[T_FARM]; break;       // records (banana farm = $)
+            case 5: bmp = towerBmp[T_BOMB]; break;       // settings (cogwheel-ish)
         }
         if (bmp != null) {
             RectF dst = new RectF(icCx - icR, y + h / 2 - icR, icCx + icR, y + h / 2 + icR);
@@ -2114,7 +2490,7 @@ public class Game {
         // 8 cards (4 cols × 2 rows)
         float top = screenH * 0.14f;
         float pad = 14;
-        int cols = 4, rows = 2;
+        int cols = 4, rows = 3;
         float cw = (screenW - pad * (cols + 1)) / cols;
         float ch = (screenH - top - pad * (rows + 1)) / rows;
         for (int i = 0; i < Tower.TYPE_COUNT; i++) {
@@ -2234,14 +2610,15 @@ public class Game {
                 "2. Tap a tower in the right panel to buy it.",
                 "3. Tap an empty grass tile to place the tower.",
                 "4. Tap GO! at the top to spawn the wave.",
-                "5. Tap an existing tower to upgrade or sell it.",
+                "5. Tap a tower to open the bottom upgrade panel.",
                 "6. Each tower has TWO upgrade paths, 3 tiers each.",
-                "7. Survive 20 waves including the MOAB boss to win!",
+                "7. Use the SEND tab to send bloons for extra ECO income.",
+                "8. Waves are infinite — survive as long as you can!",
                 "",
                 "Tips:",
-                "• Ninja Monkeys can pop Lead with their special upgrade.",
-                "• Bomb Towers cannot pop Black bloons unless you go path A tier 3.",
-                "• Ice Tower freezes everything in radius — great choke point.",
+                "• Banana Farm gives passive income every few seconds.",
+                "• Glue Gunner slows; Boomerang and Mortar hit groups.",
+                "• Ninja can pop Lead, Bomb explosions can't pop Black.",
                 "• Super Monkey and Wizard are expensive but devastating.",
         };
         float yy = screenH * 0.18f;
@@ -2250,6 +2627,137 @@ public class Game {
             yy += screenH * 0.055f;
         }
         textP.setTextSize(tile * 0.38f);
+    }
+
+    // ===================== SETTINGS MENU =====================
+    void drawSettingsMenu(Canvas c) {
+        paint.setShader(new LinearGradient(0, 0, 0, screenH, 0xFF263238, 0xFF000000, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH, paint);
+        paint.setShader(null);
+        paint.setShader(new LinearGradient(0, 0, 0, screenH * 0.12f, 0xFF0D47A1, 0xFF1565C0, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH * 0.12f, paint);
+        paint.setShader(null);
+        textP.setColor(0xFFFFEB3B);
+        textP.setTextSize(screenH * 0.06f);
+        textP.setFakeBoldText(true);
+        c.drawText("SETTINGS", 24, screenH * 0.08f, textP);
+        textP.setFakeBoldText(false);
+        drawPillButton(c, screenW - tile * 2 - 20, screenH * 0.02f, tile * 2, screenH * 0.075f, "BACK", 0xFF607D8B);
+
+        float cx = screenW * 0.5f;
+        float w = Math.min(screenW * 0.6f, 900);
+        float h = screenH * 0.1f;
+        String[] names = {"Sound Effects", "Music", "Auto-start next wave"};
+        boolean[] vals = {sfxOn, musicOn, autoStart};
+        for (int i = 0; i < 3; i++) {
+            float y = screenH * 0.22f + i * (h + 24);
+            drawToggleRow(c, cx - w / 2, y, w, h, names[i], vals[i]);
+        }
+        // credits
+        textP.setColor(0xFF80DEEA);
+        textP.setTextSize(screenH * 0.03f);
+        c.drawText("Bloon Battle  ·  Built with custom Android build chain",
+                cx - screenW * 0.2f, screenH * 0.92f, textP);
+        textP.setTextSize(tile * 0.38f);
+    }
+
+    void drawToggleRow(Canvas c, float x, float y, float w, float h, String label, boolean on) {
+        paint.setColor(0x66000000);
+        c.drawRoundRect(new RectF(x + 4, y + 6, x + w + 4, y + h + 6), 18, 18, paint);
+        paint.setColor(0xFF37474F);
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), 18, 18, paint);
+        paint.setColor(0xFF455A64);
+        c.drawRoundRect(new RectF(x + 4, y + 4, x + w - 4, y + h - 4), 14, 14, paint);
+        textP.setColor(Color.WHITE);
+        textP.setTextSize(h * 0.42f);
+        textP.setFakeBoldText(true);
+        c.drawText(label, x + 24, y + h * 0.62f, textP);
+        textP.setFakeBoldText(false);
+        // toggle pill
+        float pW = h * 1.6f;
+        float pH = h * 0.55f;
+        float px = x + w - pW - 18;
+        float py = y + (h - pH) / 2;
+        paint.setColor(on ? 0xFF388E3C : 0xFF616161);
+        c.drawRoundRect(new RectF(px, py, px + pW, py + pH), pH * 0.5f, pH * 0.5f, paint);
+        // knob
+        paint.setColor(0xFFFFFFFF);
+        float knobR = pH * 0.45f;
+        float kx = on ? px + pW - knobR - 4 : px + knobR + 4;
+        c.drawCircle(kx, py + pH / 2, knobR, paint);
+        // on/off label inside
+        textP.setColor(0xFFFFFFFF);
+        textP.setTextSize(pH * 0.6f);
+        textP.setFakeBoldText(true);
+        c.drawText(on ? "ON" : "OFF", on ? px + 14 : px + pW * 0.5f, py + pH * 0.7f, textP);
+        textP.setFakeBoldText(false);
+    }
+
+    // ===================== RECORDS MENU =====================
+    void drawRecordsMenu(Canvas c) {
+        paint.setShader(new LinearGradient(0, 0, 0, screenH, 0xFF1A237E, 0xFF000000, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH, paint);
+        paint.setShader(null);
+        paint.setShader(new LinearGradient(0, 0, 0, screenH * 0.12f, 0xFF0D47A1, 0xFF1565C0, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, screenW, screenH * 0.12f, paint);
+        paint.setShader(null);
+        textP.setColor(0xFFFFEB3B);
+        textP.setTextSize(screenH * 0.06f);
+        textP.setFakeBoldText(true);
+        c.drawText("RECORDS", 24, screenH * 0.08f, textP);
+        textP.setFakeBoldText(false);
+        drawPillButton(c, screenW - tile * 2 - 20, screenH * 0.02f, tile * 2, screenH * 0.075f, "BACK", 0xFF607D8B);
+
+        // total coins display
+        drawCoinBubble(c, screenW * 0.5f - tile * 1.5f, screenH * 0.16f,
+                "Total $" + totalCoins, 0xFFFFEB3B);
+
+        // map records
+        float top = screenH * 0.24f;
+        float pad = 16;
+        int cols = 4;
+        int rows = 2;
+        float cw = (screenW - pad * (cols + 1)) / cols;
+        float ch = (screenH - top - pad * (rows + 1)) / rows;
+        for (int i = 0; i < MapDef.ALL.length; i++) {
+            int r = i / cols;
+            int co = i % cols;
+            float x = pad + co * (cw + pad);
+            float y = top + pad + r * (ch + pad);
+            drawRecordCard(c, x, y, cw, ch, MapDef.ALL[i]);
+        }
+    }
+
+    void drawRecordCard(Canvas c, float x, float y, float w, float h, MapDef m) {
+        int top = worldAccent(m.world);
+        int bot = Tower.darken(top, 0.4f);
+        paint.setShader(null);
+        paint.setColor(0x99000000);
+        c.drawRoundRect(new RectF(x + 4, y + 6, x + w + 4, y + h + 6), 18, 18, paint);
+        paint.setShader(new LinearGradient(x, y, x, y + h, top, bot, Shader.TileMode.CLAMP));
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), 18, 18, paint);
+        paint.setShader(null);
+        paint.setColor(0x33FFFFFF);
+        c.drawRoundRect(new RectF(x + 6, y + 6, x + w - 6, y + h * 0.4f), 14, 14, paint);
+        textP.setColor(Color.WHITE);
+        textP.setTextSize(h * 0.14f);
+        textP.setFakeBoldText(true);
+        c.drawText(m.name, x + 14, y + h * 0.25f, textP);
+        textP.setFakeBoldText(false);
+        textP.setTextSize(h * 0.1f);
+        textP.setColor(0xFFB3E5FC);
+        c.drawText(MapDef.WORLD_NAME[m.world], x + 14, y + h * 0.4f, textP);
+        // best wave
+        Integer best = bestWave.get(m.name);
+        int bw = best == null ? 0 : best;
+        textP.setTextSize(h * 0.28f);
+        textP.setColor(0xFFFFEB3B);
+        textP.setFakeBoldText(true);
+        c.drawText("Wave " + bw, x + 14, y + h * 0.78f, textP);
+        textP.setFakeBoldText(false);
+        textP.setTextSize(h * 0.1f);
+        textP.setColor(0xFFE0F2F1);
+        c.drawText(bw == 0 ? "(never played)" : "best run", x + 14, y + h * 0.95f, textP);
     }
 
     // ===================== INPUT =====================
@@ -2263,6 +2771,8 @@ public class Game {
                 case S_MAPS:    onTouchMaps();    break;
                 case S_TOWERS:  onTouchTowers();  break;
                 case S_HOWTO:   onTouchHowTo();   break;
+                case S_SETTINGS:onTouchSettings(); break;
+                case S_RECORDS: onTouchRecords(); break;
                 case S_PLAYING: onTouchGame();    break;
             }
         } catch (Throwable t) {
@@ -2273,24 +2783,20 @@ public class Game {
 
     void onTouchMain() {
         float btnW = Math.min(screenW * 0.42f, 700);
-        float btnH = screenH * 0.11f;
-        float gap = btnH * 0.18f;
-        float startY = screenH * 0.42f;
+        float btnH = screenH * 0.09f;
+        float gap = btnH * 0.16f;
+        float startY = screenH * 0.34f;
         float cx = screenW * 0.5f;
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 6; i++) {
             float y = startY + i * (btnH + gap);
             if (lastTouchX > cx - btnW / 2 && lastTouchX < cx + btnW / 2
                     && lastTouchY > y && lastTouchY < y + btnH) {
-                if (i == 0) {
-                    // Quick play first map
-                    loadMap(MapDef.ALL[0]);
-                } else if (i == 1) {
-                    state = S_MAPS;
-                } else if (i == 2) {
-                    state = S_TOWERS;
-                } else if (i == 3) {
-                    state = S_HOWTO;
-                }
+                if (i == 0) loadMap(MapDef.ALL[0]);
+                else if (i == 1) state = S_MAPS;
+                else if (i == 2) state = S_TOWERS;
+                else if (i == 3) state = S_RECORDS;
+                else if (i == 4) state = S_SETTINGS;
+                else if (i == 5) state = S_HOWTO;
                 return;
             }
         }
@@ -2346,6 +2852,31 @@ public class Game {
         }
     }
 
+    void onTouchSettings() {
+        if (lastTouchX > screenW - tile * 2 - 20 && lastTouchY < screenH * 0.12f) {
+            state = S_MAIN; return;
+        }
+        float cx = screenW * 0.5f;
+        float w = Math.min(screenW * 0.6f, 900);
+        float h = screenH * 0.1f;
+        for (int i = 0; i < 3; i++) {
+            float y = screenH * 0.22f + i * (h + 24);
+            if (lastTouchX > cx - w / 2 && lastTouchX < cx + w / 2
+                    && lastTouchY > y && lastTouchY < y + h) {
+                if (i == 0) sfxOn = !sfxOn;
+                else if (i == 1) musicOn = !musicOn;
+                else if (i == 2) autoStart = !autoStart;
+                return;
+            }
+        }
+    }
+
+    void onTouchRecords() {
+        if (lastTouchX > screenW - tile * 2 - 20 && lastTouchY < screenH * 0.12f) {
+            state = S_MAIN; return;
+        }
+    }
+
     void onTouchGame() {
         if (gameOver) {
             float by = screenH / 2f + tile * 0.8f;
@@ -2388,51 +2919,8 @@ public class Game {
             return;
         }
 
-        // Right panel
+        // Right panel — always Towers/Send tabs
         if (lastTouchX > panelX) {
-            if (selectedTower != null) {
-                // sell button or close
-                float by = screenH - 70;
-                float wA = (panelW - 30) * 0.55f;
-                if (lastTouchY > by && lastTouchY < by + 60) {
-                    if (lastTouchX > panelX + 10 && lastTouchX < panelX + 10 + wA) {
-                        sellSelected();
-                        return;
-                    }
-                    if (lastTouchX > panelX + 20 + wA) {
-                        selectedTower = null;
-                        return;
-                    }
-                }
-                // Buy buttons in each path panel
-                float headerY = hudH + 12;
-                float iconSize = panelW * 0.25f;
-                float pathTop = headerY + iconSize + 14;
-                float pathH = (screenH - pathTop - 80) / 2;
-                for (int p2 = 0; p2 < 2; p2++) {
-                    float py = pathTop + p2 * (pathH + 8);
-                    UpgradeDef u = selectedTower.nextUpgrade(p2);
-                    if (u == null) continue;
-                    float btw = (panelW - 20) * 0.36f;
-                    float bth = pathH * 0.28f;
-                    float btx = (panelX + 10) + (panelW - 20) - btw - 8;
-                    float bty = py + pathH - bth - 8;
-                    if (lastTouchX > btx && lastTouchX < btx + btw
-                            && lastTouchY > bty && lastTouchY < bty + bth) {
-                        if (cash >= u.cost) {
-                            cash -= u.cost;
-                            selectedTower.totalSpent += u.cost;
-                            selectedTower.tiers[p2]++;
-                        } else {
-                            flash("Need $" + u.cost);
-                        }
-                        return;
-                    }
-                }
-                return;
-            }
-
-            // tabs first
             float tabH = hudH * 0.6f;
             float tabY = hudH + 8;
             float tabW = (panelW - 24) / 2f;
@@ -2452,7 +2940,7 @@ public class Game {
                 int cols = 2;
                 float cw = (panelW - pad * 3) / cols;
                 float availH = screenH - bodyY - 10;
-                int rows = 4;
+                int rows = 6;
                 float ch = (availH - pad * (rows + 1)) / rows;
                 for (int rr = 0; rr < rows; rr++) {
                     for (int cc = 0; cc < cols; cc++) {
@@ -2485,6 +2973,52 @@ public class Game {
                         sendBloons(i);
                         return;
                     }
+                }
+            }
+            return;
+        }
+
+        // Bottom upgrade panel (when a tower is selected)
+        if (selectedTower != null && lastTouchY > upY) {
+            float pad = 12;
+            float infoW = upW * 0.22f;
+            float bh = upH * 0.16f;
+            float by = screenH - bh - pad;
+            // sell
+            if (lastTouchY > by && lastTouchY < by + bh) {
+                if (lastTouchX > upX + pad && lastTouchX < upX + pad + infoW * 0.55f) {
+                    sellSelected();
+                    return;
+                }
+                if (lastTouchX > upX + pad + infoW * 0.58f && lastTouchX < upX + pad + infoW * 0.98f) {
+                    selectedTower = null;
+                    return;
+                }
+            }
+            // buy buttons in path panels
+            float pathX = upX + infoW + pad;
+            float pathTotalW = upW - infoW - pad * 2;
+            float pathW = (pathTotalW - pad) / 2f;
+            float pathY = upY + pad;
+            float pathH = upH - pad * 2;
+            for (int p2 = 0; p2 < 2; p2++) {
+                float px = pathX + p2 * (pathW + pad);
+                UpgradeDef u = selectedTower.nextUpgrade(p2);
+                if (u == null) continue;
+                float btw = pathW * 0.36f;
+                float bth = pathH * 0.28f;
+                float btx = px + pathW - btw - 8;
+                float bty = pathY + pathH - bth - 8;
+                if (lastTouchX > btx && lastTouchX < btx + btw
+                        && lastTouchY > bty && lastTouchY < bty + bth) {
+                    if (cash >= u.cost) {
+                        cash -= u.cost;
+                        selectedTower.totalSpent += u.cost;
+                        selectedTower.tiers[p2]++;
+                    } else {
+                        flash("Need $" + u.cost);
+                    }
+                    return;
                 }
             }
             return;

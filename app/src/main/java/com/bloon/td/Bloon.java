@@ -21,6 +21,7 @@ public class Bloon {
     float spawnDelay = 0f;
     float wobble = 0f;
     float freezeTimer = 0f;
+    boolean glued = false;
 
     public Bloon(int type) {
         this.type = type;

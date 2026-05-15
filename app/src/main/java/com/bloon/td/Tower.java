@@ -6,7 +6,7 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 
 public class Tower {
-    public static final int TYPE_COUNT = 8;
+    public static final int TYPE_COUNT = 12;
 
     int type;
     float x, y;
@@ -16,16 +16,23 @@ public class Tower {
     float aimAngle = 0f;
     int totalSpent = 0;
     float fireAnim = 0f;
+    float farmTimer = 0f; // for banana farm
 
-    public static final int[] BASE_COST = {150, 280, 400, 500, 380, 600, 2200, 480};
-    public static final String[] NAME = {"Dart", "Tack", "Bomb", "Sniper", "Ninja", "Ice", "Super", "Wizard"};
+    public static final int[] BASE_COST = {150, 280, 400, 500, 380, 600, 2200, 480, 320, 360, 700, 900};
+    public static final String[] NAME = {
+            "Dart", "Tack", "Bomb", "Sniper",
+            "Ninja", "Ice", "Super", "Wizard",
+            "Glue", "Boomer", "Mortar", "Farm"
+    };
     public static final int[] BODY_COLOR = {
             0xFF8BC34A, 0xFFFFA726, 0xFFE53935, 0xFF7E57C2,
-            0xFF455A64, 0xFF4FC3F7, 0xFFFFEB3B, 0xFF7E57C2
+            0xFF455A64, 0xFF4FC3F7, 0xFFFFEB3B, 0xFF7E57C2,
+            0xFFFFEB3B, 0xFF8D6E63, 0xFF6D4C41, 0xFFFFB300
     };
     public static final int[] BODY_COLOR2 = {
             0xFF558B2F, 0xFFE65100, 0xFFB71C1C, 0xFF4527A0,
-            0xFF263238, 0xFF0277BD, 0xFFFFC400, 0xFF4527A0
+            0xFF263238, 0xFF0277BD, 0xFFFFC400, 0xFF4527A0,
+            0xFFFBC02D, 0xFF5D4037, 0xFF3E2723, 0xFFFF8F00
     };
 
     public Tower(int type, float x, float y, int gx, int gy) {
@@ -44,6 +51,10 @@ public class Tower {
             case Game.T_ICE:    return 180;
             case Game.T_SUPER:  return 320;
             case Game.T_WIZARD: return 250;
+            case Game.T_GLUE:   return 220;
+            case Game.T_BOOM:   return 240;
+            case Game.T_MORTAR: return 9999;
+            case Game.T_FARM:   return 1;
             default: return 200;
         }
     }
@@ -57,6 +68,10 @@ public class Tower {
             case Game.T_ICE:    return 0.6f;
             case Game.T_SUPER:  return 3.5f;
             case Game.T_WIZARD: return 1.2f;
+            case Game.T_GLUE:   return 1.1f;
+            case Game.T_BOOM:   return 1.0f;
+            case Game.T_MORTAR: return 0.4f;
+            case Game.T_FARM:   return 0.2f; // produces every 5s
             default: return 1f;
         }
     }
@@ -70,6 +85,10 @@ public class Tower {
             case Game.T_ICE:    return 0;
             case Game.T_SUPER:  return 1;
             case Game.T_WIZARD: return 1;
+            case Game.T_GLUE:   return 0;
+            case Game.T_BOOM:   return 1;
+            case Game.T_MORTAR: return 3;
+            case Game.T_FARM:   return 0;
             default: return 1;
         }
     }
@@ -83,6 +102,10 @@ public class Tower {
             case Game.T_ICE:    return 9999;
             case Game.T_SUPER:  return 2;
             case Game.T_WIZARD: return 3;
+            case Game.T_GLUE:   return 2;
+            case Game.T_BOOM:   return 4;
+            case Game.T_MORTAR: return 10;
+            case Game.T_FARM:   return 1;
             default: return 1;
         }
     }
@@ -94,6 +117,9 @@ public class Tower {
             case Game.T_NINJA:  return 1100;
             case Game.T_SUPER:  return 1300;
             case Game.T_WIZARD: return 800;
+            case Game.T_GLUE:   return 800;
+            case Game.T_BOOM:   return 600;
+            case Game.T_MORTAR: return 500;
             default: return 900;
         }
     }
@@ -164,6 +190,18 @@ public class Tower {
 
     public void update(float dt, Game g) {
         if (fireAnim > 0) fireAnim -= dt * 4f;
+        // Banana Farm produces money over time
+        if (type == Game.T_FARM) {
+            farmTimer += dt;
+            float interval = 5f / Math.max(0.01f, rate() / baseRate());
+            int payout = 50 + tierSum() * 30;
+            if (farmTimer >= interval) {
+                farmTimer -= interval;
+                g.cash += payout;
+                g.addFloater("+$" + payout, x, y - g.tile * 0.5f, 0xFFFFEB3B);
+            }
+            return;
+        }
         cooldown -= dt;
         if (cooldown > 0) return;
         Bloon target = findTarget(g);
@@ -368,13 +406,63 @@ public class Tower {
                 g.projectiles.add(p);
                 break;
             }
+            case Game.T_GLUE: {
+                Projectile p = new Projectile();
+                p.x = x; p.y = y;
+                p.vx = nx * ps; p.vy = ny * ps;
+                p.kind = Projectile.K_GLUE;
+                p.damage = dmg; p.pierceLeft = pierce;
+                p.life = 1.4f; p.size = 10;
+                p.color = 0xFFFFEB3B; p.trailColor = 0xFFFFF59D;
+                p.slow = true;
+                p.glueDuration = 2.0f + tierSum() * 0.6f;
+                p.angle = aimAngle;
+                g.projectiles.add(p);
+                break;
+            }
+            case Game.T_BOOM: {
+                Projectile p = new Projectile();
+                p.x = x; p.y = y;
+                p.vx = nx * ps; p.vy = ny * ps;
+                p.kind = Projectile.K_BOOMERANG;
+                p.damage = dmg; p.pierceLeft = pierce;
+                p.life = 1.8f; p.size = 14;
+                p.color = 0xFF8D6E63; p.trailColor = 0xFFA1887F;
+                p.boomerangAngle = aimAngle;
+                p.boomerangT = 0f;
+                p.originX = x; p.originY = y;
+                p.angle = aimAngle;
+                p.leadPop = leadPop;
+                g.projectiles.add(p);
+                break;
+            }
+            case Game.T_MORTAR: {
+                Projectile p = new Projectile();
+                p.x = x; p.y = y;
+                p.originX = x; p.originY = y;
+                p.kind = Projectile.K_MORTAR;
+                p.damage = dmg; p.pierceLeft = 9999;
+                p.targetX = target.pos.x;
+                p.targetY = target.pos.y;
+                p.life = 1.2f;
+                p.lifeMax = 1.2f;
+                p.size = 14;
+                p.explosionRadius = 120 + tierSum() * 18;
+                p.explosionDamage = dmg + 1;
+                p.explosionPierce = pierce;
+                p.leadPop = true;
+                p.color = 0xFF212121; p.trailColor = 0xFFFF6F00;
+                p.angle = aimAngle;
+                g.projectiles.add(p);
+                break;
+            }
         }
     }
 
     public void draw(Canvas c, Paint p, Game g) {
         Bitmap base = g.towerBmp[type];
         Bitmap gun = g.towerGunBmp[type];
-        float dstSize = g.tile * 1.1f;
+        float dstSize = g.tile * 1.15f;
         RectF dst = new RectF(x - dstSize / 2, y - dstSize / 2, x + dstSize / 2, y + dstSize / 2);
         if (base != null) c.drawBitmap(base, null, dst, p);
         if (gun != null) {
@@ -384,19 +472,32 @@ public class Tower {
             c.restore();
         }
         // fire flash overlay
-        if (fireAnim > 0) {
+        if (fireAnim > 0 && type != Game.T_FARM && type != Game.T_ICE) {
             p.setColor((((int) (180 * fireAnim)) << 24) | 0xFFEB3B);
             c.save();
             c.rotate((float) Math.toDegrees(aimAngle), x, y);
-            c.drawCircle(x + g.tile * 0.5f, y, g.tile * 0.15f * fireAnim, p);
+            c.drawCircle(x + g.tile * 0.55f, y, g.tile * 0.15f * fireAnim, p);
             c.restore();
         }
-        // upgrade tier pips on top (path A) and bottom (path B)
+        // banana farm money animation
+        if (type == Game.T_FARM) {
+            float interval = 5f / Math.max(0.01f, rate() / baseRate());
+            float pct = farmTimer / interval;
+            p.setColor(0xFFFFEB3B);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(4);
+            float angle = pct * 360f;
+            android.graphics.RectF bar = new RectF(x - g.tile * 0.5f, y - g.tile * 0.5f,
+                    x + g.tile * 0.5f, y + g.tile * 0.5f);
+            c.drawArc(bar, -90, angle, false, p);
+            p.setStyle(Paint.Style.FILL);
+        }
+        // upgrade tier pips
         for (int pp = 0; pp < 2; pp++) {
             for (int t = 0; t < 3; t++) {
                 boolean owned = tiers[pp] > t;
                 p.setColor(owned ? (pp == 0 ? 0xFFFFEB3B : 0xFF40C4FF) : 0x55000000);
-                float py = y + g.tile * (pp == 0 ? -0.55f : 0.48f);
+                float py = y + g.tile * (pp == 0 ? -0.58f : 0.5f);
                 float px = x - g.tile * 0.22f + t * g.tile * 0.22f;
                 c.drawCircle(px, py, g.tile * 0.07f, p);
                 p.setColor(0xFF263238);
