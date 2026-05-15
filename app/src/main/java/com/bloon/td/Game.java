@@ -58,6 +58,10 @@ public class Game {
     boolean gameOver = false;
     boolean victory = false;
     int totalCoins = 0; // shown in menu
+    // economy / send-bloons (BTD2 eco style)
+    int ecoRate = 0;
+    float ecoTimer = 0f;
+    int rightTab = 0; // 0=towers, 1=send
 
     // ---------- spawning ----------
     final List<int[]> waveQueue = new ArrayList<>();
@@ -165,6 +169,9 @@ public class Game {
         lives = 120;
         wave = 0;
         score = 0;
+        ecoRate = 0;
+        ecoTimer = 0f;
+        rightTab = 0;
         speedMult = 1f;
         paused = false;
         waveActive = false;
@@ -361,23 +368,58 @@ public class Game {
         // highlight
         p.setColor(0x88FFFFFF);
         c.drawCircle(cx - r * 0.32f, cy - r * 0.36f, r * 0.25f, p);
-        // monkey face hints
+        // SEAL face on most towers (Tack/Ice are covered by their devices)
         if (type != T_TACK && type != T_ICE) {
-            p.setColor(0xFFFFE0B2);
-            c.drawCircle(cx, cy - r * 0.05f, r * 0.42f, p);
-            p.setColor(0xFF6D4C41);
-            c.drawCircle(cx - r * 0.16f, cy - r * 0.12f, r * 0.06f, p);
-            c.drawCircle(cx + r * 0.16f, cy - r * 0.12f, r * 0.06f, p);
-            p.setColor(0xFFFFAB91);
-            c.drawCircle(cx, cy + r * 0.12f, r * 0.05f, p);
-            // smile
-            p.setColor(0xFF6D4C41);
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(Math.max(2, r * 0.04f));
-            RectF mouth = new RectF(cx - r * 0.13f, cy + r * 0.05f, cx + r * 0.13f, cy + r * 0.25f);
-            c.drawArc(mouth, 20, 140, false, p);
-            p.setStyle(Paint.Style.FILL);
+            drawSealFace(c, p, cx, cy, r * 0.85f);
         }
+    }
+
+    /** Draws a cute seal face centered at (cx, cy) sized by r (face radius). */
+    void drawSealFace(Canvas c, Paint p, float cx, float cy, float r) {
+        // face oval (head + muzzle)
+        p.setShader(null);
+        p.setColor(0xFFECEFF1);
+        c.drawOval(new RectF(cx - r * 0.55f, cy - r * 0.45f, cx + r * 0.55f, cy + r * 0.4f), p);
+        // shading under chin
+        p.setColor(0xFFCFD8DC);
+        c.drawOval(new RectF(cx - r * 0.35f, cy + r * 0.05f, cx + r * 0.35f, cy + r * 0.38f), p);
+        // muzzle puffs (white)
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(cx - r * 0.12f, cy + r * 0.14f, r * 0.12f, p);
+        c.drawCircle(cx + r * 0.12f, cy + r * 0.14f, r * 0.12f, p);
+        // eyes
+        p.setColor(0xFF263238);
+        c.drawCircle(cx - r * 0.2f, cy - r * 0.15f, r * 0.1f, p);
+        c.drawCircle(cx + r * 0.2f, cy - r * 0.15f, r * 0.1f, p);
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(cx - r * 0.17f, cy - r * 0.18f, r * 0.04f, p);
+        c.drawCircle(cx + r * 0.23f, cy - r * 0.18f, r * 0.04f, p);
+        // nose (small black)
+        p.setColor(0xFF263238);
+        c.drawCircle(cx, cy + r * 0.06f, r * 0.06f, p);
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(cx - r * 0.02f, cy + r * 0.04f, r * 0.02f, p);
+        // whisker dots
+        p.setColor(0xFF455A64);
+        for (int i = 0; i < 3; i++) {
+            float dx = r * (0.18f + i * 0.07f);
+            float dy = r * (0.16f + i * 0.02f);
+            c.drawCircle(cx - dx, cy + dy, r * 0.018f, p);
+            c.drawCircle(cx + dx, cy + dy, r * 0.018f, p);
+        }
+        // mouth (tiny smile under nose)
+        p.setColor(0xFF263238);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1.5f, r * 0.025f));
+        Path mouth = new Path();
+        mouth.moveTo(cx - r * 0.07f, cy + r * 0.2f);
+        mouth.quadTo(cx, cy + r * 0.27f, cx + r * 0.07f, cy + r * 0.2f);
+        c.drawPath(mouth, p);
+        p.setStyle(Paint.Style.FILL);
+        // little flippers on each cheek
+        p.setColor(Tower.darken(0xFFCFD8DC, 0.85f));
+        c.drawOval(new RectF(cx - r * 0.68f, cy + r * 0.0f, cx - r * 0.42f, cy + r * 0.28f), p);
+        c.drawOval(new RectF(cx + r * 0.42f, cy + r * 0.0f, cx + r * 0.68f, cy + r * 0.28f), p);
     }
 
     void drawTowerGun(Canvas c, float cx, float cy, float r, int type) {
@@ -951,8 +993,16 @@ public class Game {
                 int bonus = 100 + wave * 15;
                 cash += bonus;
                 totalCoins += 20 + wave * 4;
-                if (wave >= 20) { victory = true; gameOver = true; flash("VICTORY!"); }
-                else flash("Wave +$" + bonus);
+                flash("Wave +$" + bonus);
+            }
+        }
+        // eco tick: every 1s, +ecoRate cash
+        ecoTimer += dt;
+        if (ecoTimer >= 1.0f) {
+            ecoTimer -= 1.0f;
+            if (ecoRate > 0) {
+                cash += ecoRate;
+                addFloater("+" + ecoRate + " eco", panelX + 20, hudH + 40, 0xFF4CAF50);
             }
         }
 
@@ -1117,12 +1167,26 @@ public class Game {
         textP.setColor(Color.WHITE);
         textP.setTextSize(hudH * 0.42f);
         textP.setFakeBoldText(true);
-        c.drawText("Wave " + Math.max(1, wave) + "/20", 20 + tile * 5.0f, hudH * 0.62f, textP);
+        c.drawText("Wave " + Math.max(1, wave), 20 + tile * 5.0f, hudH * 0.62f, textP);
         textP.setFakeBoldText(false);
         textP.setTextSize(hudH * 0.3f);
         textP.setColor(0xFFB3E5FC);
         c.drawText("Score " + score + "  ·  " + (currentMap != null ? currentMap.name : ""),
                 20 + tile * 5.0f, hudH * 0.92f, textP);
+        // Eco display (between wave info and buttons)
+        if (ecoRate > 0) {
+            float ecoX = panelX - tile * 1.8f;
+            paint.setShader(null);
+            paint.setColor(0xFF1B5E20);
+            c.drawRoundRect(new RectF(ecoX, hudH * 0.2f, ecoX + tile * 1.6f, hudH * 0.8f), 14, 14, paint);
+            paint.setColor(0xFF388E3C);
+            c.drawRoundRect(new RectF(ecoX + 3, hudH * 0.2f + 3, ecoX + tile * 1.6f - 3, hudH * 0.8f - 3), 12, 12, paint);
+            textP.setColor(0xFFFFFFFF);
+            textP.setFakeBoldText(true);
+            textP.setTextSize(hudH * 0.32f);
+            c.drawText("+$" + ecoRate + "/s", ecoX + 14, hudH * 0.62f, textP);
+            textP.setFakeBoldText(false);
+        }
 
         float bw = tile * 1.15f;
         float bh = hudH * 0.6f;
@@ -1222,35 +1286,136 @@ public class Game {
         paint.setColor(0xFF1A237E);
         c.drawRect(panelX, hudH, panelX + 4, screenH, paint);
 
-        textP.setColor(0xFFFFEB3B);
-        textP.setTextSize(panelW * 0.08f);
-        textP.setFakeBoldText(true);
-        c.drawText("TOWERS", panelX + 16, hudH + panelW * 0.1f, textP);
-        textP.setFakeBoldText(false);
-        textP.setTextSize(panelW * 0.05f);
-        textP.setColor(0xFFB0BEC5);
-        c.drawText("Tap to buy & place", panelX + 16, hudH + panelW * 0.15f, textP);
+        // Tabs at top: TOWERS / SEND
+        float tabH = hudH * 0.6f;
+        float tabY = hudH + 8;
+        float tabW = (panelW - 24) / 2f;
+        drawTab(c, panelX + 8, tabY, tabW, tabH, "TOWERS", rightTab == 0, 0xFFFFEB3B);
+        drawTab(c, panelX + 16 + tabW, tabY, tabW, tabH, "SEND", rightTab == 1, 0xFF81C784);
 
+        if (rightTab == 0) drawTowersTab(c, tabY + tabH + 8);
+        else drawSendTab(c, tabY + tabH + 8);
+        textP.setTextSize(tile * 0.38f);
+    }
+
+    void drawTab(Canvas c, float x, float y, float w, float h, String label, boolean active, int accent) {
+        paint.setShader(null);
+        paint.setColor(0x66000000);
+        c.drawRoundRect(new RectF(x + 2, y + 4, x + w + 2, y + h + 4), 14, 14, paint);
+        paint.setColor(active ? accent : Tower.darken(accent, 0.4f));
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), 14, 14, paint);
+        if (active) {
+            paint.setColor(0x66FFFFFF);
+            c.drawRoundRect(new RectF(x + 4, y + 4, x + w - 4, y + h * 0.4f), 12, 12, paint);
+        }
+        textP.setColor(active ? 0xFF1A237E : 0xFFCFD8DC);
+        textP.setTextSize(h * 0.45f);
+        textP.setFakeBoldText(true);
+        float tw = textP.measureText(label);
+        c.drawText(label, x + w / 2 - tw / 2, y + h * 0.65f, textP);
+        textP.setFakeBoldText(false);
+    }
+
+    void drawTowersTab(Canvas c, float startY) {
         // 2 cols x 4 rows
-        float cardY0 = hudH + panelW * 0.2f;
-        float pad = 10;
+        float pad = 8;
         int cols = 2;
         float cw = (panelW - pad * 3) / cols;
-        float availH = screenH - cardY0 - 10;
+        float availH = screenH - startY - 10;
         int rows = 4;
         float ch = (availH - pad * (rows + 1)) / rows;
-        int idx = 0;
         for (int rr = 0; rr < rows; rr++) {
             for (int cc = 0; cc < cols; cc++) {
                 int type = rr * cols + cc;
                 if (type >= Tower.TYPE_COUNT) continue;
                 float x = panelX + pad + cc * (cw + pad);
-                float y = cardY0 + pad + rr * (ch + pad);
+                float y = startY + pad + rr * (ch + pad);
                 drawTowerCard(c, x, y, cw, ch, type);
-                idx++;
             }
         }
+    }
+
+    public static final int[] SEND_BLOON = {B_RED, B_BLUE, B_GREEN, B_YELLOW, B_PINK};
+    public static final int[] SEND_COST = {25, 60, 130, 260, 500};
+    public static final int[] SEND_ECO = {2, 4, 8, 16, 30};
+    public static final int[] SEND_COUNT = {8, 6, 5, 4, 3};
+
+    void drawSendTab(Canvas c, float startY) {
+        textP.setColor(0xFFE0F2F1);
+        textP.setTextSize(panelW * 0.045f);
+        c.drawText("Spend cash to send bloons.", panelX + 12, startY + 18, textP);
+        c.drawText("Each pack boosts your ECO income.", panelX + 12, startY + 38, textP);
+        textP.setColor(0xFF81C784);
+        textP.setTextSize(panelW * 0.07f);
+        textP.setFakeBoldText(true);
+        c.drawText("ECO: +$" + ecoRate + "/s", panelX + 12, startY + 80, textP);
+        textP.setFakeBoldText(false);
+
+        float yy = startY + 100;
+        float pad = 8;
+        float availH = screenH - yy - 12;
+        int rows = SEND_BLOON.length;
+        float rh = (availH - pad * (rows + 1)) / rows;
+        for (int i = 0; i < rows; i++) {
+            float y = yy + pad + i * (rh + pad);
+            drawSendCard(c, panelX + pad, y, panelW - pad * 2, rh, i);
+        }
+    }
+
+    void drawSendCard(Canvas c, float x, float y, float w, float h, int idx) {
+        int bType = SEND_BLOON[idx];
+        int cost = SEND_COST[idx];
+        int eco = SEND_ECO[idx];
+        int count = SEND_COUNT[idx];
+        boolean afford = cash >= cost;
+        paint.setShader(null);
+        paint.setColor(0x66000000);
+        c.drawRoundRect(new RectF(x + 3, y + 4, x + w + 3, y + h + 4), 14, 14, paint);
+        paint.setColor(afford ? Tower.darken(BLOON_COLOR[bType], 0.65f) : 0xFF263238);
+        c.drawRoundRect(new RectF(x, y, x + w, y + h), 14, 14, paint);
+        paint.setColor(afford ? BLOON_COLOR[bType] : 0xFF455A64);
+        c.drawRoundRect(new RectF(x + 3, y + 3, x + w - 3, y + h - 3), 12, 12, paint);
+        paint.setColor(0x44FFFFFF);
+        c.drawRoundRect(new RectF(x + 6, y + 4, x + w - 6, y + h * 0.45f), 10, 10, paint);
+        // bloon icon left
+        float iconSize = h * 0.7f;
+        if (bloonBmp[bType] != null) {
+            RectF dst = new RectF(x + 8, y + (h - iconSize) / 2, x + 8 + iconSize, y + (h + iconSize) / 2 + iconSize * 0.1f);
+            c.drawBitmap(bloonBmp[bType], null, dst, paint);
+        }
+        // count "x N"
+        textP.setColor(Color.WHITE);
+        textP.setTextSize(h * 0.32f);
+        textP.setFakeBoldText(true);
+        c.drawText("x" + count, x + 12 + iconSize + 4, y + h * 0.5f, textP);
+        textP.setTextSize(h * 0.2f);
+        textP.setFakeBoldText(false);
+        textP.setColor(0xFFFFEB3B);
+        c.drawText("$" + cost, x + 12 + iconSize + 4, y + h * 0.78f, textP);
+        textP.setColor(0xFF80CBC4);
+        c.drawText("+$" + eco + " eco", x + 12 + iconSize + 60, y + h * 0.78f, textP);
+        // send badge right
+        float bw = h * 1.2f;
+        float bh = h * 0.6f;
+        drawPillButton(c, x + w - bw - 8, y + (h - bh) / 2, bw, bh,
+                afford ? "SEND" : "✕", afford ? 0xFF388E3C : 0xFF616161);
+        textP.setColor(Color.WHITE);
         textP.setTextSize(tile * 0.38f);
+    }
+
+    void sendBloons(int idx) {
+        if (idx < 0 || idx >= SEND_BLOON.length) return;
+        if (cash < SEND_COST[idx]) { flash("Need $" + SEND_COST[idx]); return; }
+        if (path.size() < 2) return;
+        cash -= SEND_COST[idx];
+        ecoRate += SEND_ECO[idx];
+        for (int i = 0; i < SEND_COUNT[idx]; i++) {
+            Bloon b = new Bloon(SEND_BLOON[idx]);
+            b.dAlong = 0;
+            b.spawnDelay = i * 0.25f;
+            pendingBloons.add(b);
+        }
+        flash("+$" + SEND_ECO[idx] + " eco");
     }
 
     void drawTowerCard(Canvas c, float x, float y, float w, float h, int type) {
@@ -1359,41 +1524,75 @@ public class Game {
         textP.setFakeBoldText(true);
         c.drawText("Path " + (path == 0 ? "A" : "B"), x + 12, y + h * 0.16f, textP);
 
-        // tier preview icons (3 small thumbnails)
+        // tier preview thumbnails (3 mini towers + tier badges)
+        Bitmap baseBmp = towerBmp[selectedTower.type];
+        Bitmap gunBmp = towerGunBmp[selectedTower.type];
         for (int t = 0; t < 3; t++) {
-            float tx = x + w * 0.4f + t * w * 0.18f;
-            float ty = y + h * 0.5f;
-            float sz = h * 0.36f;
+            float tx = x + w * 0.38f + t * w * 0.21f;
+            float ty = y + h * 0.55f;
+            float sz = h * 0.42f;
             boolean owned = selectedTower.tiers[path] > t;
             boolean next = selectedTower.tiers[path] == t;
-            paint.setColor(owned ? accent : (next ? 0x66FFFFFF : 0x33FFFFFF));
-            c.drawCircle(tx, ty, sz / 2 + 6, paint);
-            paint.setColor(0xFF263238);
-            c.drawCircle(tx, ty, sz / 2 + 2, paint);
-            // mini icon: redraw tower with offset for visual progression
-            paint.setColor(Tower.BODY_COLOR[selectedTower.type]);
-            c.drawCircle(tx, ty, sz * 0.4f, paint);
-            paint.setColor(Tower.darken(Tower.BODY_COLOR2[selectedTower.type], 1f));
-            c.drawCircle(tx, ty, sz * 0.4f - 3, paint);
-            // path-specific decoration on top
+            UpgradeDef u = UpgradeDef.TREE[selectedTower.type][path][t];
+            // backdrop
+            paint.setShader(null);
+            paint.setColor(owned ? Tower.darken(accent, 0.6f) : (next ? 0xFF1A237E : 0xFF263238));
+            c.drawCircle(tx, ty, sz / 2 + 8, paint);
+            paint.setColor(owned ? accent : (next ? 0xFF42A5F5 : 0x44FFFFFF));
+            c.drawCircle(tx, ty, sz / 2 + 4, paint);
+            // mini tower
+            if (baseBmp != null) {
+                RectF dst = new RectF(tx - sz / 2, ty - sz / 2, tx + sz / 2, ty + sz / 2);
+                c.drawBitmap(baseBmp, null, dst, paint);
+                if (gunBmp != null) {
+                    c.save();
+                    c.rotate(-30 + t * 30, tx, ty);
+                    c.drawBitmap(gunBmp, null, dst, paint);
+                    c.restore();
+                }
+            }
+            // tier corner badges (accent-colored chevrons)
             paint.setColor(accent);
             for (int k = 0; k <= t; k++) {
-                c.drawCircle(tx + (k - t * 0.5f) * sz * 0.18f, ty - sz * 0.5f, sz * 0.08f, paint);
+                Path chev = new Path();
+                float baseX = tx + sz / 2 + 2;
+                float baseY = ty - sz / 2 - 2 + k * sz * 0.3f;
+                chev.moveTo(baseX - sz * 0.2f, baseY);
+                chev.lineTo(baseX, baseY + sz * 0.1f);
+                chev.lineTo(baseX - sz * 0.2f, baseY + sz * 0.2f);
+                chev.close();
+                c.drawPath(chev, paint);
             }
+            // tier number label below
+            textP.setColor(owned ? 0xFFFFEB3B : (next ? 0xFFFFFFFF : 0xFF9E9E9E));
+            textP.setTextSize(h * 0.13f);
+            textP.setFakeBoldText(true);
+            String lab = "T" + (t + 1);
+            float lw = textP.measureText(lab);
+            c.drawText(lab, tx - lw / 2, ty + sz / 2 + h * 0.18f, textP);
+            // status overlay
             if (owned) {
                 paint.setColor(0xFF4CAF50);
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(4);
-                c.drawCircle(tx, ty, sz / 2 + 8, paint);
+                c.drawCircle(tx, ty, sz / 2 + 10, paint);
                 paint.setStyle(Paint.Style.FILL);
-            }
-            if (next) {
+                paint.setColor(0xFF4CAF50);
+                c.drawCircle(tx + sz * 0.45f, ty - sz * 0.45f, sz * 0.18f, paint);
+                paint.setColor(0xFFFFFFFF);
+                textP.setColor(0xFFFFFFFF);
+                textP.setTextSize(sz * 0.3f);
+                c.drawText("✓", tx + sz * 0.45f - sz * 0.1f, ty - sz * 0.35f, textP);
+            } else if (next) {
+                // pulsing yellow ring
+                float puls = 1f + (float) Math.sin(totalTime * 4) * 0.05f;
                 paint.setColor(0xFFFFEB3B);
                 paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(3);
-                c.drawCircle(tx, ty, sz / 2 + 8, paint);
+                paint.setStrokeWidth(4);
+                c.drawCircle(tx, ty, (sz / 2 + 10) * puls, paint);
                 paint.setStyle(Paint.Style.FILL);
             }
+            textP.setFakeBoldText(false);
         }
 
         UpgradeDef next = selectedTower.nextUpgrade(path);
@@ -1446,11 +1645,13 @@ public class Game {
 
     // ===================== MAIN MENU =====================
     void drawMainMenu(Canvas c) {
-        // Sky gradient background
-        paint.setShader(new LinearGradient(0, 0, 0, screenH, 0xFF40C4FF, 0xFF1565C0, Shader.TileMode.CLAMP));
+        // Sky gradient background — shifts subtly over time
+        float skyShift = (float) Math.sin(menuAnim * 0.2f) * 0.05f;
+        int skyTop = Bloon.lighten(0xFF40C4FF, Math.max(0, skyShift));
+        paint.setShader(new LinearGradient(0, 0, 0, screenH, skyTop, 0xFF1565C0, Shader.TileMode.CLAMP));
         c.drawRect(0, 0, screenW, screenH, paint);
         paint.setShader(null);
-        // Sand & water (BTD2-like beach)
+        // Sand & water
         paint.setColor(0xFFFFE082);
         Path beach = new Path();
         beach.moveTo(0, screenH * 0.65f);
@@ -1461,32 +1662,57 @@ public class Game {
         c.drawPath(beach, paint);
         paint.setColor(0xFFFFCA28);
         c.drawPath(beach, paint);
-        // sun
-        paint.setColor(0xFFFFEB3B);
-        c.drawCircle(screenW * 0.82f, screenH * 0.18f, screenH * 0.06f, paint);
+        // sun with rotating rays
+        float sunR = screenH * 0.06f;
+        float sunX = screenW * 0.82f, sunY = screenH * 0.18f;
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeWidth(8);
+        paint.setColor(0xAAFFEB3B);
+        for (int i = 0; i < 12; i++) {
+            float a = (float) (menuAnim * 0.4f + i * Math.PI / 6);
+            float r1 = sunR * 1.2f;
+            float r2 = sunR * 1.8f;
+            c.drawLine(
+                    sunX + (float) Math.cos(a) * r1, sunY + (float) Math.sin(a) * r1,
+                    sunX + (float) Math.cos(a) * r2, sunY + (float) Math.sin(a) * r2, paint);
+        }
+        paint.setStyle(Paint.Style.FILL);
         paint.setColor(0x55FFFFFF);
-        c.drawCircle(screenW * 0.82f, screenH * 0.18f, screenH * 0.09f, paint);
-        // clouds
-        drawCloud(c, screenW * 0.15f, screenH * 0.15f, screenH * 0.05f);
-        drawCloud(c, screenW * 0.6f, screenH * 0.1f, screenH * 0.06f);
-        drawCloud(c, screenW * 0.92f, screenH * 0.32f, screenH * 0.045f);
-        // floating bloons
+        c.drawCircle(sunX, sunY, sunR * 1.4f, paint);
+        paint.setColor(0xFFFFEB3B);
+        c.drawCircle(sunX, sunY, sunR, paint);
+        paint.setColor(0xCCFFFFFF);
+        c.drawCircle(sunX - sunR * 0.3f, sunY - sunR * 0.35f, sunR * 0.35f, paint);
+        // clouds drift
+        drawCloud(c, wrapX(screenW * 0.15f + menuAnim * 8f), screenH * 0.13f, screenH * 0.055f);
+        drawCloud(c, wrapX(screenW * 0.55f + menuAnim * 14f), screenH * 0.08f, screenH * 0.065f);
+        drawCloud(c, wrapX(screenW * 0.9f + menuAnim * 10f), screenH * 0.3f, screenH * 0.045f);
+        // floating bloons (drift + bob)
         java.util.Random rng = new java.util.Random(7);
-        for (int i = 0; i < 14; i++) {
+        for (int i = 0; i < 16; i++) {
             int t = rng.nextInt(8);
-            float bx = rng.nextFloat() * screenW;
-            float by = rng.nextFloat() * screenH * 0.7f;
+            float bx0 = rng.nextFloat() * screenW;
+            float by0 = rng.nextFloat() * screenH * 0.7f;
             float br = screenH * (0.04f + rng.nextFloat() * 0.03f);
-            by += (float) Math.sin(menuAnim * 0.6f + i) * br * 0.3f;
+            float bx = bx0 + (float) Math.sin(menuAnim * 0.5f + i * 0.7f) * br * 1.5f;
+            float by = by0 + (float) Math.sin(menuAnim * 0.8f + i) * br * 0.5f;
+            // skip drawing decorations behind buttons
+            if (bx > screenW * 0.32f && bx < screenW * 0.68f && by > screenH * 0.4f && by < screenH * 0.95f) continue;
             if (bloonBmp[t] != null) {
                 RectF dst = new RectF(bx - br, by - br, bx + br, by + br * 1.2f);
                 c.drawBitmap(bloonBmp[t], null, dst, paint);
             }
         }
-        // big logo
-        drawLogo(c, screenW * 0.5f, screenH * 0.18f);
+        // big logo (animated bob + slight rotation)
+        float logoBob = (float) Math.sin(menuAnim * 1.4f) * screenH * 0.012f;
+        float logoTilt = (float) Math.sin(menuAnim * 0.9f) * 1.5f;
+        c.save();
+        c.rotate(logoTilt, screenW * 0.5f, screenH * 0.18f + logoBob);
+        drawLogo(c, screenW * 0.5f, screenH * 0.18f + logoBob);
+        c.restore();
 
-        // central button stack
+        // central button stack (animated pulse)
         float btnW = Math.min(screenW * 0.42f, 700);
         float btnH = screenH * 0.11f;
         float gap = btnH * 0.18f;
@@ -1496,12 +1722,15 @@ public class Game {
         int[] colors = {0xFF66BB6A, 0xFFFFA000, 0xFF42A5F5, 0xFFAB47BC};
         int[] icons = {0, 1, 2, 3};
         for (int i = 0; i < 4; i++) {
-            drawMenuButton(c, cx - btnW / 2, startY + i * (btnH + gap), btnW, btnH, labels[i], colors[i], icons[i]);
+            float scale = 1f + (float) Math.sin(menuAnim * 2.5f + i * 0.7f) * 0.015f;
+            float y = startY + i * (btnH + gap);
+            float dh = btnH * (scale - 1f) / 2f;
+            drawMenuButton(c, cx - btnW * scale / 2, y - dh, btnW * scale, btnH * scale, labels[i], colors[i], icons[i]);
         }
 
-        // side ornaments — monkey character & balloons
-        drawSideCharacter(c, screenW * 0.13f, screenH * 0.55f, screenH * 0.16f);
-        drawSideCharacter(c, screenW * 0.87f, screenH * 0.55f, screenH * 0.16f);
+        // side ornaments — seal characters with balloons
+        drawSideCharacter(c, screenW * 0.13f, screenH * 0.6f, screenH * 0.18f, 0);
+        drawSideCharacter(c, screenW * 0.87f, screenH * 0.6f, screenH * 0.18f, 1);
 
         // top-right currency
         drawCoinBubble(c, screenW - tile * 2.6f - 20, screenH * 0.06f, String.valueOf(totalCoins), 0xFFFFEB3B);
@@ -1514,6 +1743,13 @@ public class Game {
         float tw = textP.measureText(tag);
         c.drawText(tag, screenW / 2f - tw / 2, screenH - 20, textP);
         textP.setTextSize(tile * 0.38f);
+    }
+
+    float wrapX(float x) {
+        float W = screenW + 300;
+        x = x % W;
+        if (x < 0) x += W;
+        return x - 150;
     }
 
     void drawCloud(Canvas c, float x, float y, float r) {
@@ -1601,37 +1837,99 @@ public class Game {
         textP.setTextSize(tile * 0.38f);
     }
 
-    void drawSideCharacter(Canvas c, float cx, float cy, float r) {
-        // monkey body
+    void drawSideCharacter(Canvas c, float cx, float cy, float r, int side) {
+        // Big SEAL character with subtle idle animation
+        float sway = (float) Math.sin(menuAnim * 1.4f + side) * r * 0.04f;
+        float bob = (float) Math.sin(menuAnim * 2.0f + side * 1.7f) * r * 0.06f;
+        cy += bob;
         paint.setShader(null);
+        // shadow
         paint.setColor(0x55000000);
-        c.drawCircle(cx + 5, cy + 8, r * 1.1f, paint);
-        paint.setColor(0xFF8D6E63);
-        c.drawCircle(cx, cy, r, paint);
-        paint.setColor(0xFFA1887F);
-        c.drawCircle(cx - r * 0.3f, cy - r * 0.3f, r * 0.6f, paint);
-        paint.setColor(0xFFFFE0B2);
-        c.drawCircle(cx, cy + r * 0.05f, r * 0.6f, paint);
-        paint.setColor(0xFF6D4C41);
-        c.drawCircle(cx - r * 0.2f, cy - r * 0.1f, r * 0.08f, paint);
-        c.drawCircle(cx + r * 0.2f, cy - r * 0.1f, r * 0.08f, paint);
-        paint.setColor(0xFFFFAB91);
-        c.drawCircle(cx, cy + r * 0.18f, r * 0.07f, paint);
-        paint.setColor(0xFF6D4C41);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(4);
-        RectF mouth = new RectF(cx - r * 0.2f, cy + r * 0.1f, cx + r * 0.2f, cy + r * 0.35f);
-        c.drawArc(mouth, 20, 140, false, paint);
-        paint.setStyle(Paint.Style.FILL);
-        // a balloon they hold
-        float bx = cx + r * 0.9f, by = cy - r * 0.6f;
-        float br = r * 0.45f;
-        if (bloonBmp[B_BLUE] != null) {
-            RectF dst = new RectF(bx - br, by - br, bx + br, by + br * 1.2f);
-            c.drawBitmap(bloonBmp[B_BLUE], null, dst, paint);
-        }
+        c.drawOval(new RectF(cx - r * 1.0f, cy + r * 1.05f, cx + r * 1.0f, cy + r * 1.25f), paint);
+        // body
+        paint.setColor(Tower.darken(0xFF90A4AE, 0.85f));
+        c.drawOval(new RectF(cx - r * 0.95f, cy - r * 0.1f, cx + r * 0.95f, cy + r * 1.1f), paint);
+        paint.setColor(0xFF90A4AE);
+        c.drawOval(new RectF(cx - r * 0.85f, cy - r * 0.05f, cx + r * 0.85f, cy + r * 1.0f), paint);
+        // belly
+        paint.setColor(0xFFECEFF1);
+        c.drawOval(new RectF(cx - r * 0.55f, cy + r * 0.15f, cx + r * 0.55f, cy + r * 0.95f), paint);
+        // tail (back fluke)
+        paint.setColor(Tower.darken(0xFF90A4AE, 0.8f));
+        Path tail = new Path();
+        tail.moveTo(cx, cy + r * 0.95f);
+        tail.lineTo(cx - r * 0.55f, cy + r * 1.2f);
+        tail.lineTo(cx, cy + r * 1.05f);
+        tail.lineTo(cx + r * 0.55f, cy + r * 1.2f);
+        tail.close();
+        c.drawPath(tail, paint);
+        // head
+        float hx = cx + sway, hy = cy - r * 0.35f;
+        paint.setColor(Tower.darken(0xFF90A4AE, 0.85f));
+        c.drawCircle(hx, hy, r * 0.7f, paint);
+        paint.setColor(0xFF90A4AE);
+        c.drawCircle(hx, hy, r * 0.62f, paint);
+        // face oval
+        paint.setColor(0xFFECEFF1);
+        c.drawOval(new RectF(hx - r * 0.45f, hy - r * 0.2f, hx + r * 0.45f, hy + r * 0.45f), paint);
+        // muzzle puffs
         paint.setColor(0xFFFFFFFF);
-        c.drawLine(bx, by + br, cx + r * 0.2f, cy + r * 0.2f, paint);
+        c.drawCircle(hx - r * 0.13f, hy + r * 0.18f, r * 0.13f, paint);
+        c.drawCircle(hx + r * 0.13f, hy + r * 0.18f, r * 0.13f, paint);
+        // eyes (blink)
+        boolean blink = ((int) (menuAnim * 0.7f + side) % 6) == 0
+                && Math.sin(menuAnim * 8 + side) > 0.95;
+        paint.setColor(0xFF263238);
+        if (blink) {
+            paint.setStrokeWidth(3);
+            paint.setStyle(Paint.Style.STROKE);
+            c.drawLine(hx - r * 0.28f, hy - r * 0.05f, hx - r * 0.12f, hy - r * 0.05f, paint);
+            c.drawLine(hx + r * 0.12f, hy - r * 0.05f, hx + r * 0.28f, hy - r * 0.05f, paint);
+            paint.setStyle(Paint.Style.FILL);
+        } else {
+            c.drawCircle(hx - r * 0.2f, hy - r * 0.05f, r * 0.1f, paint);
+            c.drawCircle(hx + r * 0.2f, hy - r * 0.05f, r * 0.1f, paint);
+            paint.setColor(0xFFFFFFFF);
+            c.drawCircle(hx - r * 0.17f, hy - r * 0.08f, r * 0.04f, paint);
+            c.drawCircle(hx + r * 0.23f, hy - r * 0.08f, r * 0.04f, paint);
+        }
+        // nose
+        paint.setColor(0xFF263238);
+        c.drawCircle(hx, hy + r * 0.1f, r * 0.07f, paint);
+        // whisker dots
+        paint.setColor(0xFF455A64);
+        for (int i = 0; i < 3; i++) {
+            float dx = r * (0.2f + i * 0.06f);
+            float dy = r * (0.18f + i * 0.015f);
+            c.drawCircle(hx - dx, hy + dy, r * 0.018f, paint);
+            c.drawCircle(hx + dx, hy + dy, r * 0.018f, paint);
+        }
+        // mouth
+        paint.setColor(0xFF263238);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(3);
+        Path mouth = new Path();
+        mouth.moveTo(hx - r * 0.08f, hy + r * 0.25f);
+        mouth.quadTo(hx, hy + r * 0.33f, hx + r * 0.08f, hy + r * 0.25f);
+        c.drawPath(mouth, paint);
+        paint.setStyle(Paint.Style.FILL);
+        // flippers
+        paint.setColor(Tower.darken(0xFF90A4AE, 0.8f));
+        c.drawOval(new RectF(cx - r * 1.05f, cy + r * 0.15f, cx - r * 0.75f, cy + r * 0.55f), paint);
+        c.drawOval(new RectF(cx + r * 0.75f, cy + r * 0.15f, cx + r * 1.05f, cy + r * 0.55f), paint);
+        // balloon
+        float bx = cx + r * 1.05f, by = cy - r * 0.7f + bob * 0.5f;
+        float br = r * 0.45f;
+        int bType = side == 0 ? B_BLUE : B_PINK;
+        if (bloonBmp[bType] != null) {
+            RectF dst = new RectF(bx - br, by - br, bx + br, by + br * 1.2f);
+            c.drawBitmap(bloonBmp[bType], null, dst, paint);
+        }
+        paint.setColor(0xCCFFFFFF);
+        paint.setStrokeWidth(2);
+        paint.setStyle(Paint.Style.STROKE);
+        c.drawLine(bx, by + br, cx + r * 0.85f, cy + r * 0.25f, paint);
+        paint.setStyle(Paint.Style.FILL);
     }
 
     // ===================== MAPS MENU =====================
@@ -2134,28 +2432,57 @@ public class Game {
                 return;
             }
 
-            // tower bar
-            float cardY0 = hudH + panelW * 0.2f;
-            float pad = 10;
-            int cols = 2;
-            float cw = (panelW - pad * 3) / cols;
-            float availH = screenH - cardY0 - 10;
-            int rows = 4;
-            float ch = (availH - pad * (rows + 1)) / rows;
-            for (int rr = 0; rr < rows; rr++) {
-                for (int cc = 0; cc < cols; cc++) {
-                    int type = rr * cols + cc;
-                    if (type >= Tower.TYPE_COUNT) continue;
-                    float x = panelX + pad + cc * (cw + pad);
-                    float y = cardY0 + pad + rr * (ch + pad);
-                    if (lastTouchX > x && lastTouchX < x + cw
-                            && lastTouchY > y && lastTouchY < y + ch) {
-                        if (cash >= Tower.BASE_COST[type]) {
-                            placingTowerType = (placingTowerType == type) ? -1 : type;
-                            selectedTower = null;
-                        } else {
-                            flash("Need $" + Tower.BASE_COST[type]);
+            // tabs first
+            float tabH = hudH * 0.6f;
+            float tabY = hudH + 8;
+            float tabW = (panelW - 24) / 2f;
+            if (lastTouchY > tabY && lastTouchY < tabY + tabH) {
+                if (lastTouchX > panelX + 8 && lastTouchX < panelX + 8 + tabW) {
+                    rightTab = 0;
+                    return;
+                }
+                if (lastTouchX > panelX + 16 + tabW && lastTouchX < panelX + 16 + tabW * 2) {
+                    rightTab = 1;
+                    return;
+                }
+            }
+            float bodyY = tabY + tabH + 8;
+            if (rightTab == 0) {
+                float pad = 8;
+                int cols = 2;
+                float cw = (panelW - pad * 3) / cols;
+                float availH = screenH - bodyY - 10;
+                int rows = 4;
+                float ch = (availH - pad * (rows + 1)) / rows;
+                for (int rr = 0; rr < rows; rr++) {
+                    for (int cc = 0; cc < cols; cc++) {
+                        int type = rr * cols + cc;
+                        if (type >= Tower.TYPE_COUNT) continue;
+                        float x = panelX + pad + cc * (cw + pad);
+                        float y = bodyY + pad + rr * (ch + pad);
+                        if (lastTouchX > x && lastTouchX < x + cw
+                                && lastTouchY > y && lastTouchY < y + ch) {
+                            if (cash >= Tower.BASE_COST[type]) {
+                                placingTowerType = (placingTowerType == type) ? -1 : type;
+                                selectedTower = null;
+                            } else {
+                                flash("Need $" + Tower.BASE_COST[type]);
+                            }
+                            return;
                         }
+                    }
+                }
+            } else {
+                float yy = bodyY + 100;
+                float pad = 8;
+                float availH = screenH - yy - 12;
+                int rows = SEND_BLOON.length;
+                float rh = (availH - pad * (rows + 1)) / rows;
+                for (int i = 0; i < rows; i++) {
+                    float y = yy + pad + i * (rh + pad);
+                    if (lastTouchY > y && lastTouchY < y + rh
+                            && lastTouchX > panelX + pad && lastTouchX < panelX + panelW - pad) {
+                        sendBloons(i);
                         return;
                     }
                 }
