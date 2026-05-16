@@ -60,7 +60,8 @@ public class Bloon {
         if (bmp != null) {
             float sz = r * 2.2f;
             RectF dst = new RectF(pos.x - sz / 2, pos.y - sz / 2, pos.x + sz / 2, pos.y + sz / 2 + r * 0.25f);
-            c.drawBitmap(bmp, null, dst, p);
+            // use dedicated bitmap paint (full opacity, filter on)
+            c.drawBitmap(bmp, null, dst, g.bmpP);
         } else {
             // fallback
             p.setColor(Game.BLOON_COLOR[type]);

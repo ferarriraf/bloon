@@ -96,6 +96,7 @@ public class Game {
     float lastTouchX, lastTouchY;
     final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     final Paint textP = new Paint(Paint.ANTI_ALIAS_FLAG);
+    final Paint bmpP = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     final Path scratchPath = new Path();
 
     float totalTime = 0f;
@@ -305,16 +306,20 @@ public class Game {
             c.drawText("MOAB", cx - tw / 2, cy + r * 0.15f, p);
             p.setFakeBoldText(false);
         } else {
-            int light = Bloon.lighten(col, 0.5f);
-            int dark = Bloon.darken(col, 0.55f);
+            int light = Bloon.lighten(col, 0.55f);
+            int dark = Bloon.darken(col, 0.45f);
+            // solid base layer ensures no transparency from gradient interpolation
+            p.setColor(col);
+            c.drawCircle(cx, cy, r, p);
             RadialGradient rg = new RadialGradient(cx - r * 0.35f, cy - r * 0.45f, r * 1.4f,
                     light, dark, Shader.TileMode.CLAMP);
             p.setShader(rg);
             c.drawCircle(cx, cy, r, p);
             p.setShader(null);
-            p.setColor(dark);
+            // thick dark outline for visibility on any background
+            p.setColor(0xFF1A1A1A);
             p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(Math.max(2, r * 0.05f));
+            p.setStrokeWidth(Math.max(3, r * 0.10f));
             c.drawCircle(cx, cy, r, p);
             p.setStyle(Paint.Style.FILL);
             // highlight
@@ -1338,9 +1343,15 @@ public class Game {
             if (waveQueueRemaining == 0 && bloons.isEmpty() && pendingBloons.isEmpty()) {
                 waveActive = false;
                 int bonus = 100 + wave * 15;
-                cash += bonus;
+                // banana farms drop a fat round-end payout
+                int farmBonus = 0;
+                for (int i = 0; i < towers.size(); i++) farmBonus += towers.get(i).farmRoundBonus();
+                cash += bonus + farmBonus;
                 totalCoins += 20 + wave * 4;
-                flash("Wave +$" + bonus);
+                if (farmBonus > 0) {
+                    addFloater("FARM +$" + farmBonus, playW / 2, hudH + 60, 0xFFFFEB3B);
+                }
+                flash("Wave +$" + (bonus + farmBonus));
             }
         }
         // eco tick: every 1s, +ecoRate cash
@@ -1481,6 +1492,36 @@ public class Game {
             textP.setTextSize(tile * 0.38f);
         }
 
+        if (paused && !gameOver) {
+            paint.setShader(null);
+            paint.setColor(0xAA000000);
+            c.drawRect(0, hudH, playW, screenH, paint);
+            float pw = Math.min(playW * 0.5f, screenW * 0.45f);
+            float ph = playH * 0.6f;
+            float px = (playW - pw) / 2f;
+            float py = hudH + (playH - ph) / 2f;
+            paint.setColor(0xFF263238);
+            c.drawRoundRect(new RectF(px - 6, py - 6, px + pw + 6, py + ph + 6), 24, 24, paint);
+            paint.setColor(0xFF455A64);
+            c.drawRoundRect(new RectF(px, py, px + pw, py + ph), 22, 22, paint);
+            paint.setColor(0x33FFFFFF);
+            c.drawRoundRect(new RectF(px + 4, py + 4, px + pw - 4, py + ph * 0.45f), 18, 18, paint);
+            textP.setColor(0xFFFFEB3B);
+            textP.setTextSize(ph * 0.13f);
+            textP.setFakeBoldText(true);
+            float tw = textP.measureText("PAUSED");
+            c.drawText("PAUSED", px + pw / 2 - tw / 2, py + ph * 0.18f, textP);
+            textP.setFakeBoldText(false);
+            float bh = ph * 0.18f;
+            int[] cols = {0xFF388E3C, 0xFFFFA000, 0xFFE53935};
+            String[] opts = {"RESUME", "RESTART", "MAIN MENU"};
+            for (int i = 0; i < 3; i++) {
+                float ay = py + ph * 0.25f + i * (bh + ph * 0.05f);
+                drawPillButton(c, px + 30, ay, pw - 60, bh, opts[i], cols[i]);
+            }
+            textP.setTextSize(tile * 0.38f);
+        }
+
         if (gameOver) {
             paint.setColor(0xCC000000);
             c.drawRect(0, 0, screenW, screenH, paint);
@@ -1547,8 +1588,7 @@ public class Game {
         drawPillButton(c, bx, by, bw, bh, paused ? "▶" : "❚❚", 0xFF455A64);
         bx -= bw + 10;
         drawPillButton(c, bx, by, bw, bh, waveActive ? "..." : "GO!", waveActive ? 0xFF616161 : 0xFFE53935);
-        bx -= bw + 10;
-        drawPillButton(c, bx, by, bw, bh, "MENU", 0xFF607D8B);
+        // Menu access is via Pause → overlay (avoids mis-tapping the corner)
         textP.setTextSize(tile * 0.38f);
     }
 
@@ -1812,12 +1852,16 @@ public class Game {
     // bottom upgrade panel geometry
     float upX, upY, upW, upH;
 
-    void drawUpgradePanel(Canvas c) {
-        // Bottom horizontal panel over the play area
+    void computeUpgradePanelGeom() {
         upH = Math.min(playH * 0.5f, screenH * 0.36f);
         upY = screenH - upH;
         upX = 0;
         upW = panelX;
+    }
+
+    void drawUpgradePanel(Canvas c) {
+        // Bottom horizontal panel over the play area
+        computeUpgradePanelGeom();
         paint.setShader(null);
         // shadow above panel
         paint.setColor(0x88000000);
@@ -1860,6 +1904,44 @@ public class Game {
         c.drawText("DMG " + selectedTower.damage(), ix + iconSize + 8, iy + iconSize * 0.6f, textP);
         c.drawText("R " + (int) selectedTower.range(), ix + iconSize + 8, iy + iconSize * 0.78f, textP);
         c.drawText(String.format("%.1f/s", selectedTower.rate()), ix + iconSize + 8, iy + iconSize * 0.96f, textP);
+
+        // ULT button (large, above Sell/Close)
+        float ultBH = upH * 0.18f;
+        float ultBY = screenH - upH * 0.38f - pad - ultBH;
+        boolean ready = selectedTower.ultCharge >= 1f;
+        int ultCol = ready ? 0xFFFFEB3B : 0xFF455A64;
+        // animated charge bar background
+        paint.setShader(null);
+        paint.setColor(Tower.darken(ultCol, 0.45f));
+        c.drawRoundRect(new RectF(upX + pad, ultBY + 4, upX + pad + infoW * 0.98f, ultBY + ultBH + 4), ultBH * 0.5f, ultBH * 0.5f, paint);
+        paint.setColor(ultCol);
+        c.drawRoundRect(new RectF(upX + pad, ultBY, upX + pad + infoW * 0.98f, ultBY + ultBH), ultBH * 0.5f, ultBH * 0.5f, paint);
+        // progress fill (left → right)
+        if (!ready) {
+            float fillW = infoW * 0.98f * selectedTower.ultCharge;
+            paint.setColor(0xFFFFC107);
+            c.drawRoundRect(new RectF(upX + pad, ultBY, upX + pad + fillW, ultBY + ultBH), ultBH * 0.5f, ultBH * 0.5f, paint);
+        }
+        paint.setColor(0x44FFFFFF);
+        c.drawRoundRect(new RectF(upX + pad + 4, ultBY + 4, upX + pad + infoW * 0.98f - 4, ultBY + ultBH * 0.5f), ultBH * 0.5f, ultBH * 0.5f, paint);
+        // glow pulse if ready
+        if (ready) {
+            float pulse = 1f + (float) Math.sin(totalTime * 6) * 0.06f;
+            paint.setColor(0x66FFEB3B);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(5);
+            c.drawRoundRect(new RectF(upX + pad - 4, ultBY - 4, upX + pad + infoW * 0.98f + 4, ultBY + ultBH + 4), ultBH * 0.6f, ultBH * 0.6f, paint);
+            paint.setStyle(Paint.Style.FILL);
+        }
+        // ult label
+        String ultLabel = ready ? ("⚡ " + Tower.ULT_NAME[selectedTower.type]) :
+                (Tower.ULT_NAME[selectedTower.type] + "  " + (int)(selectedTower.ultCharge * 100) + "%");
+        textP.setColor(ready ? 0xFF263238 : 0xFFE0E0E0);
+        textP.setTextSize(ultBH * 0.45f);
+        textP.setFakeBoldText(true);
+        float ulw = textP.measureText(ultLabel);
+        c.drawText(ultLabel, upX + pad + infoW * 0.49f - ulw / 2, ultBY + ultBH * 0.68f, textP);
+        textP.setFakeBoldText(false);
 
         // sell/close at bottom of info section
         int sellAmt = selectedTower.totalSpent * 7 / 10;
@@ -2893,6 +2975,26 @@ public class Game {
             return;
         }
 
+        // Pause overlay takes priority
+        if (paused && !gameOver) {
+            float pw = Math.min(playW * 0.5f, screenW * 0.45f);
+            float ph = playH * 0.6f;
+            float px = (playW - pw) / 2f;
+            float py = hudH + (playH - ph) / 2f;
+            float bh = ph * 0.18f;
+            String[] opts = {"RESUME", "RESTART", "MAIN MENU"};
+            for (int i = 0; i < 3; i++) {
+                float ay = py + ph * 0.25f + i * (bh + ph * 0.05f);
+                if (lastTouchX > px + 30 && lastTouchX < px + pw - 30
+                        && lastTouchY > ay && lastTouchY < ay + bh) {
+                    if (i == 0) { paused = false; }
+                    else if (i == 1) { loadMap(currentMap); }
+                    else if (i == 2) { state = S_MAIN; selectedTower = null; placingTowerType = -1; paused = false; }
+                    return;
+                }
+            }
+            return;
+        }
         // HUD top buttons
         if (lastTouchY < hudH) {
             float bw = tile * 1.15f;
@@ -2908,13 +3010,6 @@ public class Game {
                 if (lastTouchX > bx && lastTouchX < bx + bw) { paused = !paused; return; }
                 bx -= bw + 10;
                 if (lastTouchX > bx && lastTouchX < bx + bw) { if (!waveActive) startWave(); return; }
-                bx -= bw + 10;
-                if (lastTouchX > bx && lastTouchX < bx + bw) {
-                    state = S_MAIN;
-                    selectedTower = null;
-                    placingTowerType = -1;
-                    return;
-                }
             }
             return;
         }
@@ -2979,11 +3074,24 @@ public class Game {
         }
 
         // Bottom upgrade panel (when a tower is selected)
+        if (selectedTower != null) computeUpgradePanelGeom();
         if (selectedTower != null && lastTouchY > upY) {
             float pad = 12;
             float infoW = upW * 0.22f;
             float bh = upH * 0.16f;
             float by = screenH - bh - pad;
+            // ULT button
+            float ultBH = upH * 0.18f;
+            float ultBY = screenH - upH * 0.38f - pad - ultBH;
+            if (lastTouchX > upX + pad && lastTouchX < upX + pad + infoW * 0.98f
+                    && lastTouchY > ultBY && lastTouchY < ultBY + ultBH) {
+                if (selectedTower.ultCharge >= 1f) {
+                    selectedTower.fireUlt(this);
+                } else {
+                    flash("Ult " + (int)(selectedTower.ultCharge * 100) + "% ready");
+                }
+                return;
+            }
             // sell
             if (lastTouchY > by && lastTouchY < by + bh) {
                 if (lastTouchX > upX + pad && lastTouchX < upX + pad + infoW * 0.55f) {
